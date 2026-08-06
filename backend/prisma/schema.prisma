@@ -1,0 +1,99 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  TEACHER
+  STUDENT
+}
+
+enum SubmissionStatus {
+  NOT_SUBMITTED
+  SUBMITTED
+  GRADED
+}
+
+model User {
+  id          String        @id @default(uuid())
+  email       String        @unique
+  password    String
+  name        String
+  role        Role
+  exams       Exam[]        @relation("TeacherExams")
+  enrollments ExamStudent[]
+  submissions Submission[]
+}
+
+model Exam {
+  id         String        @id @default(uuid())
+  title      String
+  teacherId  String
+  teacher    User          @relation("TeacherExams", fields: [teacherId], references: [id])
+  students   ExamStudent[]
+  questions  Question[]
+}
+
+model ExamStudent {
+  examId    String
+  studentId String
+  exam      Exam   @relation(fields: [examId], references: [id])
+  student   User   @relation(fields: [studentId], references: [id])
+
+  @@id([examId, studentId])
+}
+
+model Question {
+  id          String       @id @default(uuid())
+  examId      String
+  exam        Exam         @relation(fields: [examId], references: [id])
+  content     String       // Math Question in LaTeX format
+  rubricSteps RubricStep[]
+  submissions Submission[]
+}
+
+model RubricStep {
+  id           String           @id @default(uuid())
+  questionId   String
+  question     Question         @relation(fields: [questionId], references: [id])
+  stepIndex    Int
+  latexContent String           // Target calculation/step in LaTeX
+  maxScore     Float
+  stepEvaluations StepEvaluation[]
+}
+
+model Submission {
+  id          String           @id @default(uuid())
+  studentId   String
+  student     User             @relation(fields: [studentId], references: [id])
+  questionId  String
+  question    Question         @relation(fields: [questionId], references: [id])
+  imageUrl    String?          // S3 Key or S3 URL
+  status      SubmissionStatus @default(NOT_SUBMITTED)
+  isPublished Boolean          @default(false)
+  evaluation  Evaluation?
+}
+
+model Evaluation {
+  id                  String           @id @default(uuid())
+  submissionId        String           @unique
+  submission          Submission       @relation(fields: [submissionId], references: [id])
+  totalScore          Float
+  isTeacherOverridden Boolean          @default(false)
+  stepEvaluations     StepEvaluation[]
+}
+
+model StepEvaluation {
+  id                String     @id @default(uuid())
+  evaluationId      String
+  evaluation        Evaluation @relation(fields: [evaluationId], references: [id])
+  rubricStepId      String
+  rubricStep        RubricStep @relation(fields: [rubricStepId], references: [id])
+  isMarkedIncorrect Boolean    // True if student made an error here
+  aiReasoning       String     // Explanation from the grading worker
+  teacherFeedback   String?    // Optional manual correction explanation
+}

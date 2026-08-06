@@ -1,0 +1,31 @@
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { MicroserviceOptions, Transport } from '@nestjs/microservices';
+import { ValidationPipe } from '@nestjs/common';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+
+  // Enable Cross-Origin Resource Sharing
+  app.enableCors();
+
+  // Validate incoming JSON body models
+  app.useGlobalPipes(new ValidationPipe({ transform: true }));
+
+  // Register microservice subscriber
+  app.connectMicroservice<MicroserviceOptions>({
+    transport: Transport.RMQ,
+    options: {
+      urls: [process.env.RABBITMQ_URL || 'amqp://admin:adminpassword@rabbitmq:5672'],
+      queue: 'grading_results',
+      queueOptions: {
+        durable: true,
+      },
+    },
+  });
+
+  await app.startAllMicroservices();
+  await app.listen(3000);
+  console.log(`Application is running on: ${await app.getUrl()}`);
+}
+bootstrap();
