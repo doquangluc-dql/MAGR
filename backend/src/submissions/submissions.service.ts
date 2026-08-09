@@ -60,6 +60,7 @@ export class SubmissionsService {
           questionId,
           imageUrl,
           status: SubmissionStatus.SUBMITTED,
+          submittedAt: new Date(),
         },
       });
     }
@@ -69,6 +70,7 @@ export class SubmissionsService {
       data: {
         imageUrl,
         status: SubmissionStatus.SUBMITTED,
+        submittedAt: new Date(),
       },
     });
   }
@@ -127,6 +129,35 @@ export class SubmissionsService {
           },
         },
       },
+    });
+  }
+
+  async deleteSubmission(studentId: string, submissionId: string) {
+    const submission = await this.prisma.submission.findUnique({
+      where: { id: submissionId },
+      include: { evaluation: true }
+    });
+
+    if (!submission) {
+      throw new NotFoundException('Submission not found');
+    }
+
+    if (submission.studentId !== studentId) {
+      throw new BadRequestException('You are not authorized to delete this submission');
+    }
+
+    // Cascade delete evaluation and stepEvaluations first to satisfy DB constraints
+    if (submission.evaluation) {
+      await this.prisma.stepEvaluation.deleteMany({
+        where: { evaluationId: submission.evaluation.id }
+      });
+      await this.prisma.evaluation.delete({
+        where: { id: submission.evaluation.id }
+      });
+    }
+
+    return this.prisma.submission.delete({
+      where: { id: submissionId }
     });
   }
 }

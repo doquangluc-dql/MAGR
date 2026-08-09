@@ -51,6 +51,7 @@ model Question {
   id          String       @id @default(uuid())
   examId      String
   exam        Exam         @relation(fields: [examId], references: [id])
+  name        String       @default("Câu hỏi")
   content     String       // Math Question in LaTeX format
   rubricSteps RubricStep[]
   submissions Submission[]
@@ -75,6 +76,7 @@ model Submission {
   imageUrl    String?          // S3 Key or S3 URL
   status      SubmissionStatus @default(NOT_SUBMITTED)
   isPublished Boolean          @default(false)
+  submittedAt DateTime?
   evaluation  Evaluation?
 }
 

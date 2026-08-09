@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Post, Get, Put, Delete, Body, Param, UseGuards } from '@nestjs/common';
 import { QuestionsService } from './questions.service';
 import { CreateQuestionDto } from './dto/question.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -17,8 +17,20 @@ export class QuestionsController {
     return this.questionsService.create(dto);
   }
 
+  @Roles(Role.TEACHER)
+  @Put(':id')
+  async update(@Param('id') id: string, @Body() dto: CreateQuestionDto) {
+    return this.questionsService.update(id, dto);
+  }
+
   @Get(':id')
   async findOne(@Param('id') id: string) {
     return this.questionsService.findOne(id);
+  }
+
+  @Roles(Role.TEACHER)
+  @Delete(':id')
+  async remove(@Param('id') id: string) {
+    return this.questionsService.remove(id);
   }
 }

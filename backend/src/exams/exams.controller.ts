@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Param, UseGuards, Request } from '@nestjs/common';
+import { Controller, Post, Get, Put, Delete, Body, Param, UseGuards, Request } from '@nestjs/common';
 import { ExamsService } from './exams.service';
 import { CreateExamDto, EnrollStudentsDto } from './dto/exam.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -31,5 +31,17 @@ export class ExamsController {
   @Post(':id/students')
   async enrollStudents(@Param('id') id: string, @Body() dto: EnrollStudentsDto) {
     return this.examsService.enrollStudents(id, dto.studentIds, dto.email);
+  }
+
+  @Roles(Role.TEACHER)
+  @Put(':id')
+  async update(@Param('id') id: string, @Body() dto: CreateExamDto, @Request() req) {
+    return this.examsService.update(id, dto.title, req.user.id);
+  }
+
+  @Roles(Role.TEACHER)
+  @Delete(':id')
+  async remove(@Param('id') id: string, @Request() req) {
+    return this.examsService.remove(id, req.user.id);
   }
 }

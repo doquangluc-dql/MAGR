@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Param, UseGuards, Request } from '@nestjs/common';
+import { Controller, Post, Get, Delete, Body, Param, UseGuards, Request } from '@nestjs/common';
 import { SubmissionsService } from './submissions.service';
 import { GetPresignedUrlDto, ConfirmSubmissionDto, TriggerGradingDto } from './dto/submission.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -35,5 +35,11 @@ export class SubmissionsController {
   @Get('question/:questionId')
   async getSubmissionsByQuestion(@Param('questionId') questionId: string) {
     return this.submissionsService.getSubmissionsByQuestion(questionId);
+  }
+
+  @Roles(Role.STUDENT)
+  @Delete(':id')
+  async deleteSubmission(@Param('id') id: string, @Request() req) {
+    return this.submissionsService.deleteSubmission(req.user.id, id);
   }
 }

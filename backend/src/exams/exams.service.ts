@@ -38,7 +38,13 @@ export class ExamsService {
           },
         },
         include: {
-          questions: true,
+          questions: {
+            include: {
+              submissions: {
+                where: { studentId: userId }
+              }
+            }
+          },
         },
       });
     }
@@ -134,5 +140,81 @@ export class ExamsService {
     await this.prisma.$transaction(operations);
 
     return { enrolledCount: targetStudentIds.length };
+  }
+
+  async update(id: string, title: string, teacherId: string) {
+    const exam = await this.prisma.exam.findUnique({ where: { id } });
+    if (!exam) {
+      throw new NotFoundException('Exam not found');
+    }
+    if (exam.teacherId !== teacherId) {
+      throw new BadRequestException('Forbidden: You do not own this exam');
+    }
+    return this.prisma.exam.update({
+      where: { id },
+      data: { title },
+    });
+  }
+
+  async remove(id: string, teacherId: string) {
+    const exam = await this.prisma.exam.findUnique({
+      where: { id },
+      include: { questions: true },
+    });
+    if (!exam) {
+      throw new NotFoundException('Exam not found');
+    }
+    if (exam.teacherId !== teacherId) {
+      throw new BadRequestException('Forbidden: You do not own this exam');
+    }
+
+    const questionIds = exam.questions.map((q) => q.id);
+
+    return this.prisma.$transaction(async (tx) => {
+      // Find all submissions for these questions
+      const submissions = await tx.submission.findMany({
+        where: { questionId: { in: questionIds } },
+        include: { evaluation: true },
+      });
+      const submissionIds = submissions.map((s) => s.id);
+      const evaluationIds = submissions
+        .map((s) => s.evaluation?.id)
+        .filter(Boolean) as string[];
+
+      // Delete Step Evaluations
+      await tx.stepEvaluation.deleteMany({
+        where: { evaluationId: { in: evaluationIds } },
+      });
+
+      // Delete Evaluations
+      await tx.evaluation.deleteMany({
+        where: { submissionId: { in: submissionIds } },
+      });
+
+      // Delete Submissions
+      await tx.submission.deleteMany({
+        where: { questionId: { in: questionIds } },
+      });
+
+      // Delete Rubric Steps
+      await tx.rubricStep.deleteMany({
+        where: { questionId: { in: questionIds } },
+      });
+
+      // Delete Questions
+      await tx.question.deleteMany({
+        where: { examId: id },
+      });
+
+      // Delete ExamStudent enrollments
+      await tx.examStudent.deleteMany({
+        where: { examId: id },
+      });
+
+      // Delete Exam itself
+      return tx.exam.delete({
+        where: { id },
+      });
+    });
   }
 }

@@ -22,6 +22,10 @@ export class CreateQuestionDto {
 
   @IsNotEmpty()
   @IsString()
+  name: string;
+
+  @IsNotEmpty()
+  @IsString()
   content: string; // Question in LaTeX
 
   @IsArray()
