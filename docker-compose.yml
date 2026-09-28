@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres-db:
     image: postgres:15-alpine
@@ -13,6 +11,14 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - math_network
 
   rabbitmq:
     image: rabbitmq:3-management-alpine
@@ -24,40 +30,22 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
-
-  minio:
-    image: minio/minio:latest
-    container_name: math_minio
-    restart: always
-    command: server /data --console-address ":9001"
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     volumes:
-      - minio_data:/data
-
-  minio-create-bucket:
-    image: minio/mc:latest
-    container_name: math_minio_init
-    depends_on:
-      - minio
-    entrypoint: >
-      sh -c "
-      sleep 5;
-      /usr/bin/mc alias set local http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD};
-      /usr/bin/mc mb --ignore-existing local/${S3_BUCKET};
-      /usr/bin/mc anonymous set download local/${S3_BUCKET};
-      /usr/bin/mc anonymous set public local/${S3_BUCKET};
-      exit 0;
-      "
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - math_network
 
   nestjs-api:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      target: production
     container_name: math_backend
     restart: always
     ports:
@@ -73,9 +61,12 @@ services:
       AWS_REGION: "${AWS_REGION}"
       JWT_SECRET: "${JWT_SECRET}"
     depends_on:
-      - postgres-db
-      - rabbitmq
-      - minio-create-bucket
+      postgres-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - math_network
 
   ai-worker:
     build:
@@ -86,19 +77,30 @@ services:
     environment:
       RABBITMQ_URL: "${RABBITMQ_URL}"
     depends_on:
-      - rabbitmq
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - math_network
 
   react-client:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      target: production
     container_name: math_frontend
     restart: always
     ports:
-      - "5173:5173"
+      - "80:80"
+      - "5173:80"
     depends_on:
       - nestjs-api
+    networks:
+      - math_network
 
 volumes:
   postgres_data:
-  minio_data:
+  rabbitmq_data:
+
+networks:
+  math_network:
+    driver: bridge
