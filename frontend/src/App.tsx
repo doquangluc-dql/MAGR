@@ -20,7 +20,10 @@ import {
   ArrowRight,
   TrendingUp,
   FileText,
-  HelpCircle
+  HelpCircle,
+  Settings,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { MathRenderer } from './components/MathRenderer';
@@ -36,6 +39,18 @@ const DashboardContent: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>(
     window.location.hash ? window.location.hash.replace('#', '') : 'home'
   );
+  
+  const [isDarkMode, setIsDarkMode] = useState(true);
+  const [showSettings, setShowSettings] = useState(false);
+
+  const toggleTheme = () => {
+    setIsDarkMode(!isDarkMode);
+    if (isDarkMode) {
+      document.body.classList.add('light-theme');
+    } else {
+      document.body.classList.remove('light-theme');
+    }
+  };
 
   useEffect(() => {
     const currentHash = window.location.hash.replace('#', '');
@@ -194,6 +209,55 @@ const DashboardContent: React.FC = () => {
       setEnrollStudentEmail('');
     } catch (err) {
       alert('Lỗi thêm học sinh. Hãy kiểm tra xem email học sinh có chính xác không.');
+    }
+  };
+
+  const handleFileUploadCSV = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        const rows = text.split('\n').map(row => row.trim()).filter(row => row);
+        const students = [];
+        
+        // Skip header if exists
+        let startIdx = 0;
+        if (rows[0].toLowerCase().includes('mssv')) startIdx = 1;
+        
+        for (let i = startIdx; i < rows.length; i++) {
+          const parts = rows[i].split(',');
+          if (parts.length >= 2) {
+            students.push({ mssv: parts[0].trim(), name: parts[1].trim() });
+          }
+        }
+        
+        if (students.length === 0) {
+          alert('Không tìm thấy dữ liệu hợp lệ trong file CSV. Định dạng cần thiết: mssv,name');
+          return;
+        }
+        
+        const res = await axios.post(`/exams/${selectedExam.id}/students/import`, { students });
+        alert(`Thành công! Đã xử lý ${res.data.totalProcessed} sinh viên. Thêm mới ${res.data.addedCount} sinh viên vào kỳ thi.`);
+        handleSelectExam(selectedExam.id);
+      } catch (err) {
+        console.error(err);
+        alert('Lỗi khi tải file CSV. Vui lòng kiểm tra lại định dạng.');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const handleRemoveStudentFromExam = async (studentId: string) => {
+    if (!window.confirm('Bạn có chắc chắn muốn xóa học sinh này khỏi kỳ thi?')) return;
+    try {
+      await axios.delete(`/exams/${selectedExam.id}/students/${studentId}`);
+      alert('Đã xóa học sinh khỏi kỳ thi');
+      handleSelectExam(selectedExam.id);
+    } catch (err) {
+      alert('Lỗi khi xóa học sinh');
     }
   };
 
@@ -453,11 +517,29 @@ const DashboardContent: React.FC = () => {
           )}
         </div>
 
-        <div className="sidebar-footer">
-          <div className="menu-item" onClick={logout} style={{ color: '#ef4444' }}>
-            <LogOut size={18} />
-            <span className="menu-item-text">Đăng xuất</span>
+        <div className="sidebar-footer" style={{ position: 'relative' }}>
+          <div className="menu-item" onClick={() => setShowSettings(!showSettings)}>
+            <Settings size={18} />
+            <span className="menu-item-text">Cài đặt</span>
           </div>
+          
+          {showSettings && (
+            <div style={{ position: 'absolute', bottom: '60px', left: '16px', right: '16px', backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '8px', zIndex: 10 }}>
+              <div 
+                className="menu-item" 
+                onClick={() => {
+                  if (window.confirm('Bạn có chắc chắn muốn đăng xuất không?')) {
+                    logout();
+                  }
+                }} 
+                style={{ color: '#ef4444', marginBottom: 0 }}
+              >
+                <LogOut size={18} />
+                <span className="menu-item-text">Đăng xuất</span>
+              </div>
+            </div>
+          )}
+
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', marginTop: '12px' }}>
             {!sidebarCollapsed && "Phiên bản v1.1.0"}
           </div>
@@ -466,15 +548,20 @@ const DashboardContent: React.FC = () => {
 
       {/* Main Content Area */}
       <div className="main-content">
-        <div className="breadcrumb">
-          <span>Hệ thống</span>
-          <span className="breadcrumb-separator">/</span>
-          <span className="breadcrumb-active">
-            {activeTab === 'home' && 'Trang chủ'}
-            {activeTab === 'exams' && 'Quản lý kỳ thi'}
-            {activeTab === 'student-exams' && 'Kỳ thi của tôi'}
-            {activeTab === 'grading' && 'Chấm điểm bài làm'}
-          </span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+          <div className="breadcrumb">
+            <span>Hệ thống</span>
+            <span className="breadcrumb-separator">/</span>
+            <span className="breadcrumb-active">
+              {activeTab === 'home' && 'Trang chủ'}
+              {activeTab === 'exams' && 'Quản lý kỳ thi'}
+              {activeTab === 'student-exams' && 'Kỳ thi của tôi'}
+              {activeTab === 'grading' && 'Chấm điểm bài làm'}
+            </span>
+          </div>
+          <button className="btn-icon" onClick={toggleTheme} title="Giao diện Sáng/Tối">
+            {isDarkMode ? <Sun size={18} /> : <Moon size={18} />}
+          </button>
         </div>
 
         {/* TAB 1: HOME */}
@@ -679,9 +766,15 @@ const DashboardContent: React.FC = () => {
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                   <h3>Danh sách học sinh đã ghi danh</h3>
-                  <button className="btn btn-primary" onClick={() => setShowEnrollStudentForm(!showEnrollStudentForm)}>
-                    {showEnrollStudentForm ? 'Đóng form' : '+ Thêm học sinh'}
-                  </button>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <label className="btn btn-secondary" style={{ cursor: 'pointer' }}>
+                      <Upload size={16} style={{ marginRight: '8px' }} /> Tải lên CSV
+                      <input type="file" accept=".csv" style={{ display: 'none' }} onChange={handleFileUploadCSV} />
+                    </label>
+                    <button className="btn btn-primary" onClick={() => setShowEnrollStudentForm(!showEnrollStudentForm)}>
+                      {showEnrollStudentForm ? 'Đóng form' : '+ Thêm học sinh'}
+                    </button>
+                  </div>
                 </div>
 
                 {/* Form to Enroll Student */}
@@ -716,6 +809,7 @@ const DashboardContent: React.FC = () => {
                         <th>Học sinh</th>
                         <th>Email</th>
                         <th>ID Học sinh</th>
+                        <th>Thao tác</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -725,11 +819,16 @@ const DashboardContent: React.FC = () => {
                           <td style={{ fontWeight: '600' }}>{s.student.name}</td>
                           <td>{s.student.email}</td>
                           <td style={{ color: 'var(--text-muted)', fontFamily: 'monospace' }}>{s.student.id}</td>
+                          <td>
+                            <button className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '12px', color: '#ef4444' }} onClick={() => handleRemoveStudentFromExam(s.student.id)}>
+                              Xóa
+                            </button>
+                          </td>
                         </tr>
                       ))}
                       {(selectedExam.students?.length === 0 || !selectedExam.students) && (
                         <tr>
-                          <td colSpan={4} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
+                          <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
                             Chưa có học sinh nào được thêm vào kỳ thi.
                           </td>
                         </tr>
