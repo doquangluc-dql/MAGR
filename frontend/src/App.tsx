@@ -27,7 +27,8 @@ import { MathRenderer } from './components/MathRenderer';
 import { ImageViewerWithBbox } from './components/ImageViewerWithBbox';
 
 // Configure Axios defaults
-axios.defaults.baseURL = `http://${window.location.hostname}:3000`;
+// Cấu hình URL gọi tới Backend (Render hoặc Localhost)
+axios.defaults.baseURL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:3000`;
 
 const DashboardContent: React.FC = () => {
   const { user, logout } = useAuth();
