@@ -1,7 +1,6 @@
-import { Injectable, NotFoundException, BadRequestException, Inject } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { S3Service } from './s3.service';
-import { ClientProxy } from '@nestjs/microservices';
 import { SubmissionStatus, OcrStatus } from '@prisma/client';
 
 @Injectable()
@@ -9,7 +8,6 @@ export class SubmissionsService {
   constructor(
     private prisma: PrismaService,
     private s3Service: S3Service,
-    @Inject('GRADING_TASKS_CLIENT') private client: ClientProxy,
   ) {}
 
   async getPresignedUrl(studentId: string, questionId: string, contentType: string, clientHost?: string) {
@@ -77,11 +75,8 @@ export class SubmissionsService {
       });
     }
 
-    // Tự động phát event OCR ngầm sang RabbitMQ ngay khi học sinh nộp bài
-    this.client.emit('ocr_task_event', {
-      submission_id: submission.id,
-      image_url: submission.imageUrl,
-    });
+    // Tự động phát event OCR ngầm sang Webhook Modal (Placeholder)
+    console.log(`[Placeholder] Gọi Modal OCR cho submission: ${submission.id}`);
 
     return submission;
   }
@@ -142,7 +137,7 @@ export class SubmissionsService {
         })),
       };
 
-      this.client.emit('grading_task_event', payload);
+      console.log(`[Placeholder] Gọi Webhook Modal để chấm bài: ${sub.id}`);
       triggered.push(sub.id);
     }
 
