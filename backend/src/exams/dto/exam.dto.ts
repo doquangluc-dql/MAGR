@@ -14,4 +14,7 @@ export class EnrollStudentsDto {
   @IsString()
   email?: string;
 }
-
+export class ImportStudentsDto {
+  @IsArray()
+  students: { mssv: string; name: string }[];
+}

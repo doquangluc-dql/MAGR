@@ -142,6 +142,70 @@ export class ExamsService {
     return { enrolledCount: targetStudentIds.length };
   }
 
+  async importStudents(examId: string, students: { mssv: string; name: string }[]) {
+    const exam = await this.prisma.exam.findUnique({ where: { id: examId } });
+    if (!exam) {
+      throw new NotFoundException('Exam not found');
+    }
+
+    let addedCount = 0;
+    
+    // Lưu ý: Dùng bcrypt.hash để băm mật khẩu, nhưng để đơn giản ta import nó
+    const bcrypt = require('bcrypt');
+    const saltRounds = 10;
+
+    for (const stu of students) {
+      const email = `${stu.mssv}@gm.uit.edu.vn`;
+      
+      // 1. Kiểm tra tài khoản đã tồn tại chưa
+      let user = await this.prisma.user.findFirst({
+        where: { email }
+      });
+
+      // 2. Nếu chưa tồn tại, tạo mới
+      if (!user) {
+        const hashedPassword = await bcrypt.hash(stu.mssv, saltRounds);
+        user = await this.prisma.user.create({
+          data: {
+            name: stu.name,
+            email: email,
+            password: hashedPassword,
+            role: Role.STUDENT
+          }
+        });
+      }
+
+      // 3. Đưa sinh viên vào kỳ thi
+      const existingEnroll = await this.prisma.examStudent.findUnique({
+        where: { examId_studentId: { examId, studentId: user.id } }
+      });
+
+      if (!existingEnroll) {
+        await this.prisma.examStudent.create({
+          data: { examId, studentId: user.id }
+        });
+        addedCount++;
+      }
+    }
+
+    return { addedCount, totalProcessed: students.length };
+  }
+
+  async removeStudent(examId: string, studentId: string) {
+    const enroll = await this.prisma.examStudent.findUnique({
+      where: { examId_studentId: { examId, studentId } }
+    });
+    if (!enroll) {
+      throw new NotFoundException('Student is not enrolled in this exam');
+    }
+    
+    await this.prisma.examStudent.delete({
+      where: { examId_studentId: { examId, studentId } }
+    });
+    
+    return { success: true };
+  }
+
   async update(id: string, title: string, teacherId: string) {
     const exam = await this.prisma.exam.findUnique({ where: { id } });
     if (!exam) {
