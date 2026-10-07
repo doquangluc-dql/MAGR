@@ -18,6 +18,13 @@ enum SubmissionStatus {
   GRADED
 }
 
+enum OcrStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 model User {
   id          String        @id @default(uuid())
   email       String        @unique
@@ -74,6 +81,9 @@ model Submission {
   questionId  String
   question    Question         @relation(fields: [questionId], references: [id])
   imageUrl    String?          // S3 Key or S3 URL
+  ocrStatus   OcrStatus        @default(PENDING)
+  ocrContent  String?          // Text / LaTeX parsed from OCR
+  ocrBboxes   Json?            // Array of bounding box objects
   status      SubmissionStatus @default(NOT_SUBMITTED)
   isPublished Boolean          @default(false)
   submittedAt DateTime?

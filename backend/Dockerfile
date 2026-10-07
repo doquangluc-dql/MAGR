@@ -77,4 +77,4 @@ EXPOSE 3000
 # Use dumb-init to properly handle signal forwarding (SIGTERM, SIGINT)
 ENTRYPOINT ["dumb-init", "--"]
 
-CMD ["sh", "-c", "if [ -f dist/src/main.js ]; then node dist/src/main.js; else node dist/main.js; fi"]
+CMD ["sh", "-c", "npx prisma db push --skip-generate && (if [ -f dist/src/main.js ]; then node dist/src/main.js; else node dist/main.js; fi)"]

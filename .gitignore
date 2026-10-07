@@ -59,3 +59,17 @@ htmlcov/
 .mypy_cache/
 
 .env.production
+/modal-ocr/batch_ocr.py
+/paddle_ocr
+# Data files
+*.csv
+*.xlsx
+*.xls
+
+# Image outputs and test data
+visualization/
+images/
+uploads/
+
+SYSTEM_DESIGN.md
+scripts/

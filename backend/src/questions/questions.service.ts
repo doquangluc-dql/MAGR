@@ -64,32 +64,55 @@ export class QuestionsService {
   async update(id: string, dto: CreateQuestionDto) {
     const question = await this.prisma.question.findUnique({
       where: { id },
+      include: { rubricSteps: true }
     });
     if (!question) {
       throw new NotFoundException('Question not found');
     }
 
     return this.prisma.$transaction(async (tx) => {
-      // 1. Delete old rubric steps
-      await tx.rubricStep.deleteMany({
-        where: { questionId: id },
-      });
+      const existingSteps = question.rubricSteps;
+      const newSteps = dto.rubricSteps;
+      const newStepIndexes = newSteps.map(s => s.stepIndex);
 
-      // 2. Create new rubric steps
+      // 1. Delete steps that are no longer in the new list (and their evaluations)
+      const stepsToDelete = existingSteps.filter(s => !newStepIndexes.includes(s.stepIndex));
+      if (stepsToDelete.length > 0) {
+        const idsToDelete = stepsToDelete.map(s => s.id);
+        await tx.stepEvaluation.deleteMany({
+          where: { rubricStepId: { in: idsToDelete } }
+        });
+        await tx.rubricStep.deleteMany({
+          where: { id: { in: idsToDelete } }
+        });
+      }
+
+      // 2. Update existing steps or Create new ones
       const rubricSteps = await Promise.all(
-        dto.rubricSteps.map((step) =>
-          tx.rubricStep.create({
-            data: {
-              questionId: id,
-              stepIndex: step.stepIndex,
-              latexContent: step.latexContent,
-              maxScore: step.maxScore,
-            },
-          }),
-        ),
+        newSteps.map(async (step) => {
+          const existing = existingSteps.find(s => s.stepIndex === step.stepIndex);
+          if (existing) {
+            return tx.rubricStep.update({
+              where: { id: existing.id },
+              data: {
+                latexContent: step.latexContent,
+                maxScore: step.maxScore
+              }
+            });
+          } else {
+            return tx.rubricStep.create({
+              data: {
+                questionId: id,
+                stepIndex: step.stepIndex,
+                latexContent: step.latexContent,
+                maxScore: step.maxScore
+              }
+            });
+          }
+        })
       );
 
-      // 3. Update question
+      // 3. Update question basic info
       const updatedQuestion = await tx.question.update({
         where: { id },
         data: {
@@ -97,6 +120,8 @@ export class QuestionsService {
           content: dto.content,
         },
       });
+
+      rubricSteps.sort((a, b) => a.stepIndex - b.stepIndex);
 
       return {
         ...updatedQuestion,

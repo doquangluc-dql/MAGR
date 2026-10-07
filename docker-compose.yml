@@ -76,6 +76,7 @@ services:
     restart: always
     environment:
       RABBITMQ_URL: "${RABBITMQ_URL}"
+      MODAL_OCR_URL: "${MODAL_OCR_URL}"
     depends_on:
       rabbitmq:
         condition: service_healthy

@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { MathRenderer } from './components/MathRenderer';
+import { ImageViewerWithBbox } from './components/ImageViewerWithBbox';
 
 // Configure Axios defaults
 axios.defaults.baseURL = `http://${window.location.hostname}:3000`;
@@ -31,7 +32,29 @@ axios.defaults.baseURL = `http://${window.location.hostname}:3000`;
 const DashboardContent: React.FC = () => {
   const { user, logout } = useAuth();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [activeTab, setActiveTab] = useState<string>('home');
+  const [activeTab, setActiveTab] = useState<string>(
+    window.location.hash ? window.location.hash.replace('#', '') : 'home'
+  );
+
+  useEffect(() => {
+    const currentHash = window.location.hash.replace('#', '');
+    if (currentHash !== activeTab) {
+      if (!currentHash) {
+        window.history.replaceState(null, '', `#${activeTab}`);
+      } else {
+        window.history.pushState(null, '', `#${activeTab}`);
+      }
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const hash = window.location.hash.replace('#', '');
+      setActiveTab(hash || 'home');
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   // Data State
   const [exams, setExams] = useState<any[]>([]);
@@ -732,6 +755,7 @@ const DashboardContent: React.FC = () => {
                           <th>Học sinh</th>
                           <th>Ảnh bài nộp</th>
                           <th>Trạng thái</th>
+                          <th>OCR AI</th>
                           <th>Công bố</th>
                           <th>Điểm AI</th>
                           <th>Thao tác</th>
@@ -750,6 +774,12 @@ const DashboardContent: React.FC = () => {
                               {sub.status === 'NOT_SUBMITTED' && <span className="badge badge-error">Chưa nộp</span>}
                               {sub.status === 'SUBMITTED' && <span className="badge badge-warning">Đang chờ chấm</span>}
                               {sub.status === 'GRADED' && <span className="badge badge-success">Đã chấm điểm</span>}
+                            </td>
+                            <td>
+                              {sub.ocrStatus === 'PROCESSING' && <span className="badge badge-warning" style={{ backgroundColor: 'rgba(56,189,248,0.2)', color: '#38bdf8' }}>Đang OCR...</span>}
+                              {sub.ocrStatus === 'COMPLETED' && <span className="badge badge-success" style={{ backgroundColor: 'rgba(52,211,153,0.2)', color: '#34d399' }}>Đã OCR</span>}
+                              {sub.ocrStatus === 'FAILED' && <span className="badge badge-error">Lỗi OCR</span>}
+                              {(!sub.ocrStatus || sub.ocrStatus === 'PENDING') && <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>Chờ OCR</span>}
                             </td>
                             <td>
                               {sub.isPublished ? (
@@ -867,6 +897,16 @@ const DashboardContent: React.FC = () => {
                                 Gỡ bài làm
                               </button>
                             </div>
+
+                            <div style={{ marginTop: '16px' }}>
+                              <ImageViewerWithBbox
+                                imageUrl={sub.imageUrl}
+                                bboxes={sub.ocrBboxes}
+                                ocrStatus={sub.ocrStatus}
+                                ocrContent={sub.ocrContent}
+                                altText="Bài làm của bạn"
+                              />
+                            </div>
                           </div>
 
                           {/* Graded Details display */}
@@ -915,9 +955,15 @@ const DashboardContent: React.FC = () => {
             </div>
 
             <div className="grading-split">
-              {/* Left Column: Image viewer */}
-              <div className="image-panel">
-                <img src={selectedSubmission.imageUrl} alt="Student answer sheet" />
+              {/* Left Column: Image viewer with OCR BBox Overlay */}
+              <div className="image-panel" style={{ height: 'auto', minHeight: 'unset', alignItems: 'stretch' }}>
+                <ImageViewerWithBbox
+                  imageUrl={selectedSubmission.imageUrl}
+                  bboxes={selectedSubmission.ocrBboxes}
+                  ocrStatus={selectedSubmission.ocrStatus}
+                  ocrContent={selectedSubmission.ocrContent}
+                  altText={`Bài làm của ${selectedSubmission.student?.name || 'học sinh'}`}
+                />
               </div>
 
               {/* Right Column: AI grading output & feedback override inputs */}

@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, Inject } from '@nes
 import { PrismaService } from '../prisma.service';
 import { S3Service } from './s3.service';
 import { ClientProxy } from '@nestjs/microservices';
-import { SubmissionStatus } from '@prisma/client';
+import { SubmissionStatus, OcrStatus } from '@prisma/client';
 
 @Injectable()
 export class SubmissionsService {
@@ -53,24 +53,55 @@ export class SubmissionsService {
       where: { studentId, questionId },
     });
 
+    let submission;
     if (!existing) {
-      return this.prisma.submission.create({
+      submission = await this.prisma.submission.create({
         data: {
           studentId,
           questionId,
           imageUrl,
           status: SubmissionStatus.SUBMITTED,
+          ocrStatus: OcrStatus.PROCESSING,
+          submittedAt: new Date(),
+        },
+      });
+    } else {
+      submission = await this.prisma.submission.update({
+        where: { id: existing.id },
+        data: {
+          imageUrl,
+          status: SubmissionStatus.SUBMITTED,
+          ocrStatus: OcrStatus.PROCESSING,
           submittedAt: new Date(),
         },
       });
     }
 
+    // Tự động phát event OCR ngầm sang RabbitMQ ngay khi học sinh nộp bài
+    this.client.emit('ocr_task_event', {
+      submission_id: submission.id,
+      image_url: submission.imageUrl,
+    });
+
+    return submission;
+  }
+
+  async saveOcrResult(payload: {
+    submission_id: string;
+    ocr_content?: string;
+    ocr_bboxes?: any;
+    status: 'success' | 'error';
+    error_message?: string;
+  }) {
+    const { submission_id, ocr_content, ocr_bboxes, status } = payload;
+    const isSuccess = status === 'success';
+
     return this.prisma.submission.update({
-      where: { id: existing.id },
+      where: { id: submission_id },
       data: {
-        imageUrl,
-        status: SubmissionStatus.SUBMITTED,
-        submittedAt: new Date(),
+        ocrStatus: isSuccess ? OcrStatus.COMPLETED : OcrStatus.FAILED,
+        ocrContent: ocr_content || null,
+        ocrBboxes: ocr_bboxes || null,
       },
     });
   }
@@ -101,6 +132,8 @@ export class SubmissionsService {
       const payload = {
         submission_id: sub.id,
         s3_image_url: sub.imageUrl,
+        ocr_content: sub.ocrContent,
+        ocr_bboxes: sub.ocrBboxes,
         rubric_steps: sub.question.rubricSteps.map((step) => ({
           id: step.id,
           step_index: step.stepIndex,
