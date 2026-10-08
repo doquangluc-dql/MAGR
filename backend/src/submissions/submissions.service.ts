@@ -2,7 +2,6 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../prisma.service';
 import { S3Service } from './s3.service';
 import { SubmissionStatus, OcrStatus } from '@prisma/client';
-import axios from 'axios';
 import { EvaluationsService } from '../evaluations/evaluations.service';
 
 @Injectable()
@@ -82,14 +81,19 @@ export class SubmissionsService {
     const ocrUrl = process.env.MODAL_OCR_URL;
     if (ocrUrl) {
       // Chạy ngầm (không await) để web phản hồi ngay cho sinh viên
-      axios.post(ocrUrl, {
-        image_url: submission.imageUrl,
-        custom_id: submission.id,
-        max_length: 1024,
-        image_size: 1024,
-        base_size: 1024
-      }).then(res => {
-        const ocrRes = res.data;
+      fetch(ocrUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image_url: submission.imageUrl,
+          custom_id: submission.id,
+          max_length: 1024,
+          image_size: 1024,
+          base_size: 1024
+        })
+      })
+      .then(res => res.json())
+      .then((ocrRes: any) => {
         let fullText = "";
         if (ocrRes && ocrRes.ocr) {
             fullText = ocrRes.ocr.map((item: any) => item.context).join("\n");
@@ -170,8 +174,13 @@ export class SubmissionsService {
       const workerUrl = process.env.MODAL_WORKER_URL;
       if (workerUrl) {
         // Gọi Webhook Modal bất đồng bộ
-        axios.post(workerUrl, payload).then(res => {
-          const gradingResult = res.data;
+        fetch(workerUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+        .then(res => res.json())
+        .then((gradingResult: any) => {
           if (gradingResult && gradingResult.status === 'success') {
             this.evaluationsService.saveAiEvaluation({
               submission_id: gradingResult.submission_id,
