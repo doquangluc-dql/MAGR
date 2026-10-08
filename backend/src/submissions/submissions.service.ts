@@ -2,12 +2,15 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../prisma.service';
 import { S3Service } from './s3.service';
 import { SubmissionStatus, OcrStatus } from '@prisma/client';
+import axios from 'axios';
+import { EvaluationsService } from '../evaluations/evaluations.service';
 
 @Injectable()
 export class SubmissionsService {
   constructor(
     private prisma: PrismaService,
     private s3Service: S3Service,
+    private evaluationsService: EvaluationsService,
   ) {}
 
   async getPresignedUrl(studentId: string, questionId: string, contentType: string, clientHost?: string) {
@@ -75,8 +78,35 @@ export class SubmissionsService {
       });
     }
 
-    // Tự động phát event OCR ngầm sang Webhook Modal (Placeholder)
-    console.log(`[Placeholder] Gọi Modal OCR cho submission: ${submission.id}`);
+    // Tự động phát event OCR ngầm sang Webhook Modal (gọi trực tiếp)
+    const ocrUrl = process.env.MODAL_OCR_URL;
+    if (ocrUrl) {
+      // Chạy ngầm (không await) để web phản hồi ngay cho sinh viên
+      axios.post(ocrUrl, {
+        image_url: submission.imageUrl,
+        custom_id: submission.id,
+        max_length: 1024,
+        image_size: 1024,
+        base_size: 1024
+      }).then(res => {
+        const ocrRes = res.data;
+        let fullText = "";
+        if (ocrRes && ocrRes.ocr) {
+            fullText = ocrRes.ocr.map((item: any) => item.context).join("\n");
+        }
+        this.saveOcrResult({
+          submission_id: submission.id,
+          ocr_content: fullText,
+          ocr_bboxes: ocrRes.ocr,
+          status: 'success'
+        });
+      }).catch(err => {
+        console.error(`[Error] Gọi OCR thất bại cho submission ${submission.id}:`, err.message);
+        this.saveOcrResult({ submission_id: submission.id, status: 'error' });
+      });
+    } else {
+      console.log(`[Placeholder] Bỏ qua gọi OCR tự động vì chưa có biến MODAL_OCR_URL`);
+    }
 
     return submission;
   }
@@ -137,7 +167,28 @@ export class SubmissionsService {
         })),
       };
 
-      console.log(`[Placeholder] Gọi Webhook Modal để chấm bài: ${sub.id}`);
+      const workerUrl = process.env.MODAL_WORKER_URL;
+      if (workerUrl) {
+        // Gọi Webhook Modal bất đồng bộ
+        axios.post(workerUrl, payload).then(res => {
+          const gradingResult = res.data;
+          if (gradingResult && gradingResult.status === 'success') {
+            this.evaluationsService.saveAiEvaluation({
+              submission_id: gradingResult.submission_id,
+              total_score: gradingResult.total_score,
+              steps: gradingResult.steps.map((s: any) => ({
+                rubric_step_id: s.rubric_step_id,
+                is_marked_incorrect: s.is_marked_incorrect,
+                ai_reasoning: s.ai_reasoning
+              }))
+            });
+          }
+        }).catch(err => {
+          console.error(`[Error] Không thể gọi AI Worker cho submission ${sub.id}:`, err.message);
+        });
+      } else {
+        console.log(`[Placeholder] Chờ AI chấm bài cho submission: ${sub.id}`);
+      }
       triggered.push(sub.id);
     }
 

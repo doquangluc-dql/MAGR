@@ -22,8 +22,16 @@ class GradingTask(BaseModel):
     ocr_content: Optional[str] = None
     rubric_steps: List[Dict[str, Any]] = []
 
-@app.function(image=worker_image, timeout=300)
-@modal.web_endpoint(method="POST")
+# Cấu hình Secret để kéo biến môi trường từ file .env.production lên mây an toàn
+env_path = os.path.join(os.path.dirname(__file__), "..", ".env.production")
+try:
+    my_secret = modal.Secret.from_dotenv(env_path)
+    secrets_list = [my_secret]
+except Exception:
+    secrets_list = []
+
+@app.function(image=worker_image, timeout=300, secrets=secrets_list)
+@modal.fastapi_endpoint(method="POST")
 def grade_submission(task: GradingTask) -> Dict[str, Any]:
     """
     Webhook này sẽ được NestJS gọi khi giáo viên bấm "Chấm bài".
