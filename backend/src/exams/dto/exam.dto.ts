@@ -1,4 +1,4 @@
-import { IsString, IsArray, IsOptional } from 'class-validator';
+import { IsString, IsArray, IsOptional, IsBoolean } from 'class-validator';
 
 export class CreateExamDto {
   @IsString()
@@ -13,6 +13,14 @@ export class EnrollStudentsDto {
   @IsOptional()
   @IsString()
   email?: string;
+
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isNewAccount?: boolean;
 }
 export class ImportStudentsDto {
   @IsArray()

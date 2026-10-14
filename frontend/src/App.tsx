@@ -86,6 +86,9 @@ const DashboardContent: React.FC = () => {
     { stepIndex: 1, latexContent: '', maxScore: 0.25 }
   ]);
   const [enrollStudentEmail, setEnrollStudentEmail] = useState('');
+  const [enrollStudentName, setEnrollStudentName] = useState('');
+  const [enrollMode, setEnrollMode] = useState<'existing' | 'new'>('existing');
+  const [enrollErrorMessage, setEnrollErrorMessage] = useState('');
   const [studentsList, setStudentsList] = useState<any[]>([]);
 
   // Student Upload States
@@ -105,10 +108,42 @@ const DashboardContent: React.FC = () => {
   const [editExamTitle, setEditExamTitle] = useState('');
   const [selectedQuestionForSubmissions, setSelectedQuestionForSubmissions] = useState<any>(null);
   const [editingQuestion, setEditingQuestion] = useState<any>(null);
+  const [selectedQuestionForStudent, setSelectedQuestionForStudent] = useState<any>(null);
 
   const formatScore = (num: number) => {
     const str = num.toString();
     return str.includes('.') ? str : num.toFixed(1);
+  };
+
+  const getSubmissionStatusInfo = (sub: any) => {
+    if (!sub || sub.status === 'NOT_SUBMITTED') {
+      return {
+        label: 'Chưa nộp',
+        className: 'badge badge-error'
+      };
+    }
+    if (sub.status === 'GRADED' || (sub.isPublished && sub.evaluation)) {
+      return {
+        label: 'Đã chấm',
+        className: 'badge badge-success'
+      };
+    }
+    if (sub.status === 'LATE') {
+      return {
+        label: 'Đã nộp muộn',
+        className: 'badge badge-warning'
+      };
+    }
+    if (sub.status === 'SUBMITTED') {
+      return {
+        label: 'Đã nộp',
+        className: 'badge badge-info'
+      };
+    }
+    return {
+      label: 'Chưa nộp',
+      className: 'badge badge-error'
+    };
   };
 
   // Fetch initial dashboard info
@@ -116,13 +151,31 @@ const DashboardContent: React.FC = () => {
     try {
       const res = await axios.get('/exams');
       setExams(res.data);
+      return res.data;
     } catch (err) {
       console.error('Failed to fetch exams', err);
+      return [];
     }
   };
 
   useEffect(() => {
-    fetchExams();
+    const initData = async () => {
+      const loadedExams = await fetchExams();
+      if (loadedExams && loadedExams.length > 0) {
+        const currentHash = window.location.hash ? window.location.hash.replace('#', '') : activeTab;
+        const savedExamId = localStorage.getItem('selectedExamId');
+        const matched = savedExamId ? loadedExams.find((e: any) => e.id === savedExamId) : null;
+        
+        if (currentHash === 'student-exams' || currentHash === 'exams') {
+          const targetId = matched ? matched.id : loadedExams[0].id;
+          handleSelectExam(targetId, undefined, true);
+        } else if (matched) {
+          handleSelectExam(matched.id, undefined, false);
+        }
+      }
+    };
+
+    initData();
     if (user?.role === 'TEACHER') {
       // Mock/fetch student list for enrollment
       setStudentsList([
@@ -145,11 +198,12 @@ const DashboardContent: React.FC = () => {
     }
   };
 
-  const handleSelectExam = async (examId: string) => {
+  const handleSelectExam = async (examId: string, keepSelectedQuestionId?: string, overrideTab: boolean = true) => {
     try {
       const res = await axios.get(`/exams/${examId}`);
       const examData = res.data;
       setSelectedExam(examData);
+      localStorage.setItem('selectedExamId', examId);
       setEditExamTitle(examData.title);
       setIsEditingExam(false);
       setExamSubTab('questions');
@@ -157,12 +211,23 @@ const DashboardContent: React.FC = () => {
       setShowEnrollStudentForm(false);
       setSelectedQuestionForSubmissions(null);
       setEditingQuestion(null);
-      if (user?.role === 'TEACHER') {
-        setActiveTab('exams');
+
+      if (keepSelectedQuestionId) {
+        const foundQ = examData.questions?.find((x: any) => x.id === keepSelectedQuestionId);
+        setSelectedQuestionForStudent(foundQ || null);
       } else {
-        setActiveTab('student-exams');
+        setSelectedQuestionForStudent(null);
+      }
+
+      if (overrideTab) {
+        if (user?.role === 'TEACHER') {
+          setActiveTab('exams');
+        } else {
+          setActiveTab('student-exams');
+        }
       }
     } catch (err) {
+      console.error('Cannot load exam details', err);
       alert('Không thể tải chi tiết kỳ thi');
     }
   };
@@ -200,15 +265,30 @@ const DashboardContent: React.FC = () => {
   const handleEnrollStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedExam || !enrollStudentEmail) return;
+    if (enrollMode === 'new' && !enrollStudentName.trim()) {
+      setEnrollErrorMessage('Vui lòng nhập họ và tên học sinh.');
+      return;
+    }
+    setEnrollErrorMessage('');
     try {
       await axios.post(`/exams/${selectedExam.id}/students`, {
-        email: enrollStudentEmail
+        email: enrollStudentEmail.trim(),
+        name: enrollMode === 'new' ? enrollStudentName.trim() : undefined,
+        isNewAccount: enrollMode === 'new'
       });
-      alert('Đã thêm học sinh vào kỳ thi');
+      alert(enrollMode === 'new' ? 'Đã tạo tài khoản và thêm học sinh vào kỳ thi thành công!' : 'Đã thêm học sinh vào kỳ thi thành công!');
       handleSelectExam(selectedExam.id);
       setEnrollStudentEmail('');
-    } catch (err) {
-      alert('Lỗi thêm học sinh. Hãy kiểm tra xem email học sinh có chính xác không.');
+      setEnrollStudentName('');
+      setEnrollErrorMessage('');
+    } catch (err: any) {
+      console.error(err);
+      const serverMsg = err.response?.data?.message;
+      const displayMsg = Array.isArray(serverMsg) ? serverMsg.join(', ') : serverMsg;
+      const errorText = displayMsg || (enrollMode === 'new'
+        ? 'Lỗi khi tạo tài khoản học sinh. Vui lòng kiểm tra lại.'
+        : 'Lỗi thêm học sinh. Hãy kiểm tra xem email học sinh có chính xác không.');
+      setEnrollErrorMessage(errorText);
     }
   };
 
@@ -455,7 +535,9 @@ const DashboardContent: React.FC = () => {
 
       setUploadProgress('Nộp bài thành công!');
       setSelectedFile(null);
-      handleSelectExam(selectedExam.id);
+      if (selectedExam) {
+        await handleSelectExam(selectedExam.id, questionId, false);
+      }
     } catch (err) {
       console.error(err);
       setUploadProgress('Lỗi trong quá trình nộp bài');
@@ -470,7 +552,7 @@ const DashboardContent: React.FC = () => {
       await axios.delete(`/submissions/${submissionId}`);
       alert('Đã gỡ bài làm thành công!');
       if (selectedExam) {
-        handleSelectExam(selectedExam.id);
+        await handleSelectExam(selectedExam.id, selectedQuestionForStudent?.id, false);
       }
     } catch (err) {
       console.error(err);
@@ -498,12 +580,32 @@ const DashboardContent: React.FC = () => {
 
           <div className="menu-group-label">KỲ THI</div>
           {user?.role === 'TEACHER' ? (
-            <div className={`menu-item ${activeTab === 'exams' ? 'active' : ''}`} onClick={() => setActiveTab('exams')}>
+            <div
+              className={`menu-item ${activeTab === 'exams' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab('exams');
+                if (!selectedExam && exams.length > 0) {
+                  const savedId = localStorage.getItem('selectedExamId');
+                  const targetId = (savedId && exams.some(e => e.id === savedId)) ? savedId : exams[0].id;
+                  handleSelectExam(targetId, undefined, true);
+                }
+              }}
+            >
               <BookOpen size={18} />
               <span className="menu-item-text">Quản lý kỳ thi</span>
             </div>
           ) : (
-            <div className={`menu-item ${activeTab === 'student-exams' ? 'active' : ''}`} onClick={() => setActiveTab('student-exams')}>
+            <div
+              className={`menu-item ${activeTab === 'student-exams' ? 'active' : ''}`}
+              onClick={() => {
+                setActiveTab('student-exams');
+                if (!selectedExam && exams.length > 0) {
+                  const savedId = localStorage.getItem('selectedExamId');
+                  const targetId = (savedId && exams.some(e => e.id === savedId)) ? savedId : exams[0].id;
+                  handleSelectExam(targetId, undefined, true);
+                }
+              }}
+            >
               <BookOpen size={18} />
               <span className="menu-item-text">Kỳ thi của tôi</span>
             </div>
@@ -779,22 +881,141 @@ const DashboardContent: React.FC = () => {
 
                 {/* Form to Enroll Student */}
                 {showEnrollStudentForm && (
-                  <div className="panel-card" style={{ maxWidth: '500px', marginBottom: '24px' }}>
+                  <div className="panel-card" style={{ maxWidth: '520px', marginBottom: '24px' }}>
                     <h3 style={{ marginBottom: '16px' }}>Thêm học sinh vào kỳ thi</h3>
+                    
+                    {/* 2 nút chuyển đổi chế độ tài khoản */}
+                    <div style={{ marginBottom: '18px' }}>
+                      <label className="form-label" style={{ marginBottom: '8px', display: 'block', fontWeight: 600 }}>
+                        Trạng thái tài khoản
+                      </label>
+                      <div style={{ display: 'flex', gap: '10px' }}>
+                        <button
+                          type="button"
+                          className={`btn ${enrollMode === 'existing' ? 'btn-primary' : 'btn-secondary'}`}
+                          style={{
+                            flex: 1,
+                            padding: '9px 12px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '8px',
+                            fontWeight: enrollMode === 'existing' ? 600 : 500,
+                            borderRadius: '8px',
+                            cursor: 'pointer'
+                          }}
+                          onClick={() => {
+                            setEnrollMode('existing');
+                            setEnrollErrorMessage('');
+                          }}
+                        >
+                          <span style={{
+                            width: '12px',
+                            height: '12px',
+                            borderRadius: '50%',
+                            border: `2px solid ${enrollMode === 'existing' ? '#fff' : 'var(--text-muted)'}`,
+                            backgroundColor: enrollMode === 'existing' ? '#fff' : 'transparent',
+                            display: 'inline-block'
+                          }} />
+                          Đã có tài khoản
+                        </button>
+                        <button
+                          type="button"
+                          className={`btn ${enrollMode === 'new' ? 'btn-primary' : 'btn-secondary'}`}
+                          style={{
+                            flex: 1,
+                            padding: '9px 12px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '8px',
+                            fontWeight: enrollMode === 'new' ? 600 : 500,
+                            borderRadius: '8px',
+                            cursor: 'pointer'
+                          }}
+                          onClick={() => {
+                            setEnrollMode('new');
+                            setEnrollErrorMessage('');
+                          }}
+                        >
+                          <span style={{
+                            width: '12px',
+                            height: '12px',
+                            borderRadius: '50%',
+                            border: `2px solid ${enrollMode === 'new' ? '#fff' : 'var(--text-muted)'}`,
+                            backgroundColor: enrollMode === 'new' ? '#fff' : 'transparent',
+                            display: 'inline-block'
+                          }} />
+                          Chưa có tài khoản
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Hiển thị lỗi nếu email đã tồn tại hoặc không tìm thấy */}
+                    {enrollErrorMessage && (
+                      <div style={{
+                        padding: '10px 14px',
+                        backgroundColor: '#fee2e2',
+                        border: '1px solid #ef4444',
+                        borderRadius: '8px',
+                        color: '#b91c1c',
+                        fontSize: '0.88rem',
+                        marginBottom: '16px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px'
+                      }}>
+                        <AlertTriangle size={18} style={{ flexShrink: 0 }} />
+                        <span>{enrollErrorMessage}</span>
+                      </div>
+                    )}
+
                     <form onSubmit={handleEnrollStudent}>
-                      <div className="form-group">
-                        <label className="form-label">Email học sinh</label>
+                      {/* Khi chọn Chưa có tài khoản: hiển thị thêm ô Họ và Tên */}
+                      {enrollMode === 'new' && (
+                        <div className="form-group" style={{ marginBottom: '16px' }}>
+                          <label className="form-label">
+                            Họ và Tên học sinh <span style={{ color: '#ef4444' }}>*</span>
+                          </label>
+                          <input
+                            type="text"
+                            className="form-input"
+                            placeholder="Ví dụ: Nguyễn Văn A"
+                            value={enrollStudentName}
+                            onChange={(e) => {
+                              setEnrollStudentName(e.target.value);
+                              if (enrollErrorMessage) setEnrollErrorMessage('');
+                            }}
+                            required
+                          />
+                        </div>
+                      )}
+
+                      <div className="form-group" style={{ marginBottom: '16px' }}>
+                        <label className="form-label">
+                          Email học sinh <span style={{ color: '#ef4444' }}>*</span>
+                        </label>
                         <input
                           type="email"
                           className="form-input"
-                          placeholder="studentA@gmail.com"
+                          placeholder={enrollMode === 'new' ? "studentA@gmail.com" : "Nhập email học sinh đã có tài khoản..."}
                           value={enrollStudentEmail}
-                          onChange={(e) => setEnrollStudentEmail(e.target.value)}
+                          onChange={(e) => {
+                            setEnrollStudentEmail(e.target.value);
+                            if (enrollErrorMessage) setEnrollErrorMessage('');
+                          }}
                           required
                         />
                       </div>
+
+                      {enrollMode === 'new' && (
+                        <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
+                          💡 <em>Học sinh mới sẽ được cấp mật khẩu mặc định là: <strong>123456</strong></em>
+                        </div>
+                      )}
+
                       <button type="submit" className="btn btn-primary btn-full">
-                        Thêm học sinh
+                        {enrollMode === 'new' ? 'Tạo tài khoản & Thêm vào kỳ thi' : 'Thêm học sinh'}
                       </button>
                     </form>
                   </div>
@@ -908,141 +1129,410 @@ const DashboardContent: React.FC = () => {
         )}
 
         {/* TAB 3: STUDENT EXAM DETAIL & SUBMISSION */}
-        {activeTab === 'student-exams' && selectedExam && (
+        {activeTab === 'student-exams' && (
           <div>
-            <div className="page-header">
-              <h1 className="page-title">{selectedExam.title}</h1>
-              <p className="page-subtitle">ID Kỳ thi: {selectedExam.id}</p>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-              {selectedExam.questions?.map((q: any, index: number) => {
-                const sub = q.submissions?.[0]; // Current student's submission for this question
-                return (
-                  <div key={q.id} className="panel-card" style={{ borderLeft: '4px solid var(--primary-color)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '16px' }}>
-                      <h3>{q.name || `Câu ${index + 1}`}</h3>
-                      <div>
-                        {sub?.status === 'GRADED' ? (
-                          <span className="badge badge-success">Điểm: {formatScore(sub.evaluation?.totalScore || 0)}đ</span>
-                        ) : sub?.status === 'SUBMITTED' ? (
-                          <span className="badge badge-warning">Đã nộp bài (Chờ chấm)</span>
-                        ) : (
-                          <span className="badge badge-error">Chưa nộp</span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="step-math" style={{ marginBottom: '24px' }}>
-                      <MathRenderer math={q.content} />
-                    </div>
-
-                    {/* Submit Section */}
-                    {(!sub || sub.status === 'NOT_SUBMITTED') ? (
-                      <div style={{ backgroundColor: 'rgba(255,255,255,0.01)', border: '1px dashed var(--border-color)', borderRadius: '8px', padding: '24px', textAlign: 'center' }}>
-                        <Upload size={32} style={{ color: 'var(--text-secondary)', marginBottom: '12px' }} />
-                        <div style={{ marginBottom: '16px' }}>Tải ảnh bài làm tự luận của bạn lên (Định dạng PNG, JPG)</div>
-
-                        <div style={{ display: 'flex', justifyContent: 'center', gap: '16px', alignItems: 'center' }}>
-                          <input
-                            type="file"
-                            accept="image/*"
-                            onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-                            style={{ display: 'none' }}
-                            id={`file-upload-${q.id}`}
-                          />
-                          <label htmlFor={`file-upload-${q.id}`} className="btn btn-secondary" style={{ cursor: 'pointer' }}>
-                            Chọn ảnh bài làm
-                          </label>
-                          {selectedFile && <span style={{ fontSize: '13px' }}>{selectedFile.name}</span>}
-
-                          <button className="btn btn-primary" onClick={() => handleStudentUpload(q.id)} disabled={!selectedFile}>
-                            Tải lên & Nộp bài
-                          </button>
-                        </div>
-                        {uploadProgress && <div style={{ marginTop: '12px', fontSize: '13px', color: 'var(--primary-color)', fontWeight: 'bold' }}>{uploadProgress}</div>}
-                      </div>
-                    ) : (
-                      <div>
-                        <div style={{ display: 'flex', gap: '24px', alignItems: 'start' }}>
-                          <div style={{ flex: 1 }}>
-                            <div className="form-label" style={{ marginBottom: '8px' }}>Bài làm đã nộp:</div>
-                            {sub.submittedAt && (
-                              <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-                                Thời gian nộp: {new Date(sub.submittedAt).toLocaleString('vi-VN', {
-                                  day: '2-digit',
-                                  month: '2-digit',
-                                  year: 'numeric',
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                  second: '2-digit'
-                                })}
-                              </div>
-                            )}
-                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
-                              <a
-                                href={sub.imageUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="btn btn-secondary"
-                                style={{ display: 'inline-flex', alignItems: 'center', textDecoration: 'none', fontSize: '13px', padding: '6px 12px' }}
-                              >
-                                Xem bài làm (Tab mới)
-                              </a>
-                              <button
-                                className="btn btn-secondary"
-                                style={{ backgroundColor: '#ef4444', color: 'white', border: 'none', fontSize: '13px', padding: '6px 12px' }}
-                                onClick={() => handleDeleteSubmission(sub.id)}
-                              >
-                                Gỡ bài làm
-                              </button>
-                            </div>
-
-                            <div style={{ marginTop: '16px' }}>
-                              <ImageViewerWithBbox
-                                imageUrl={sub.imageUrl}
-                                bboxes={sub.ocrBboxes}
-                                ocrStatus={sub.ocrStatus}
-                                ocrContent={sub.ocrContent}
-                                altText="Bài làm của bạn"
-                              />
+            {!selectedExam ? (
+              <div className="panel-card" style={{ textAlign: 'center', padding: '48px 24px' }}>
+                <BookOpen size={48} style={{ color: 'var(--primary-color)', margin: '0 auto 16px', opacity: 0.8 }} />
+                <h3 style={{ marginBottom: '8px' }}>Kỳ thi của tôi</h3>
+                {exams.length > 0 ? (
+                  <div>
+                    <p style={{ color: 'var(--text-secondary)', marginBottom: '24px' }}>
+                      Chọn một kỳ thi để xem danh sách câu hỏi và thực hiện nộp bài:
+                    </p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxWidth: '600px', margin: '0 auto' }}>
+                      {exams.map((ex: any) => (
+                        <div
+                          key={ex.id}
+                          className="panel-card"
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            cursor: 'pointer',
+                            border: '1px solid var(--border-color)',
+                            padding: '16px 20px',
+                            transition: 'all 0.2s ease',
+                            textAlign: 'left'
+                          }}
+                          onClick={() => handleSelectExam(ex.id)}
+                        >
+                          <div>
+                            <div style={{ fontWeight: '600', fontSize: '16px' }}>{ex.title}</div>
+                            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                              Số câu hỏi: {ex.questions?.length || 0}
                             </div>
                           </div>
+                          <button className="btn btn-primary" onClick={() => handleSelectExam(ex.id)}>
+                            Vào làm bài →
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <p style={{ color: 'var(--text-secondary)', marginTop: '12px' }}>
+                    Hiện tại bạn chưa được ghi danh vào kỳ thi nào. Vui lòng liên hệ giáo viên để được thêm vào danh sách thi.
+                  </p>
+                )}
+              </div>
+            ) : !selectedQuestionForStudent ? (
+              /* VIEW 1: OVERVIEW & QUESTION TABLE */
+              <div>
+                <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
+                  <div>
+                    <h1 className="page-title">{selectedExam.title}</h1>
+                    <p className="page-subtitle">ID Kỳ thi: {selectedExam.id}</p>
+                  </div>
+                  {exams.length > 1 && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Đổi kỳ thi:</span>
+                      <select
+                        className="form-input"
+                        style={{ width: 'auto', padding: '6px 12px', fontSize: '13px' }}
+                        value={selectedExam.id}
+                        onChange={(e) => handleSelectExam(e.target.value)}
+                      >
+                        {exams.map((ex: any) => (
+                          <option key={ex.id} value={ex.id}>{ex.title}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
 
-                          {/* Graded Details display */}
-                          {sub.isPublished && sub.evaluation && (
-                            <div style={{ flex: 1.5 }}>
-                              <h4 style={{ marginBottom: '12px' }}>Phân tích kết quả chấm điểm từng bước:</h4>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                                {sub.evaluation.stepEvaluations?.map((step: any, sIdx: number) => (
-                                  <div key={step.id} className={`step-item ${step.isMarkedIncorrect ? 'incorrect' : 'correct'}`}>
-                                    <div className="step-header">
-                                      <span className="step-title">Bước {sIdx + 1}</span>
-                                      <span className={`badge ${step.isMarkedIncorrect ? 'badge-error' : 'badge-success'}`}>
-                                        {step.isMarkedIncorrect ? 'Sai sót logic' : 'Chính xác'}
-                                      </span>
-                                    </div>
-                                    <div className="step-reasoning">
-                                      <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>AI Nhận xét:</div>
-                                      <div>{step.aiReasoning}</div>
-                                      {step.teacherFeedback && (
-                                        <div style={{ marginTop: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '6px', color: 'var(--primary-color)' }}>
-                                          <strong>Phản hồi từ Giáo viên:</strong> {step.teacherFeedback}
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
+                {/* Stat cards summary */}
+                <div className="stat-card" style={{ display: 'flex', gap: '32px', flexWrap: 'wrap', marginBottom: '24px' }}>
+                  <div>
+                    <div className="stat-label">Tổng số câu hỏi</div>
+                    <div className="stat-value" style={{ color: 'var(--primary-color)', fontSize: '24px', fontWeight: 'bold' }}>
+                      {selectedExam.questions?.length || 0}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="stat-label">Tiến độ nộp bài</div>
+                    <div className="stat-value" style={{ color: '#38bdf8', fontSize: '24px', fontWeight: 'bold' }}>
+                      {selectedExam.questions?.filter((q: any) => q.submissions?.[0] && q.submissions[0].status !== 'NOT_SUBMITTED').length || 0} / {selectedExam.questions?.length || 0}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="stat-label">Tổng điểm đạt được</div>
+                    <div className="stat-value" style={{ color: '#10b981', fontSize: '24px', fontWeight: 'bold' }}>
+                      {formatScore(
+                        selectedExam.questions?.reduce((sum: number, q: any) => {
+                          const sub = q.submissions?.[0];
+                          return sum + (sub?.isPublished && sub?.evaluation ? sub.evaluation.totalScore : 0);
+                        }, 0) || 0
+                      )}đ / {formatScore(
+                        selectedExam.questions?.reduce((sum: number, q: any) => {
+                          return sum + (q.rubricSteps?.reduce((stepSum: number, s: any) => stepSum + (s.maxScore || 0), 0) || 0);
+                        }, 0) || 0
+                      )}đ
+                    </div>
+                  </div>
+                </div>
+
+                {/* Table of Questions */}
+                <div className="panel-card">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                    <h3 style={{ margin: 0 }}>Danh sách câu hỏi</h3>
+                    <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                      Nhấn vào câu hỏi để xem đề bài và nộp bài làm
+                    </span>
+                  </div>
+
+                  <div className="table-container">
+                    <table className="app-table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: '70px', textAlign: 'center' }}>STT</th>
+                          <th>Tên câu hỏi</th>
+                          <th style={{ width: '160px', textAlign: 'center' }}>Điểm số</th>
+                          <th style={{ width: '160px', textAlign: 'center' }}>Trạng thái</th>
+                          <th style={{ width: '140px', textAlign: 'center' }}>Thao tác</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedExam.questions?.map((q: any, idx: number) => {
+                          const sub = q.submissions?.[0];
+                          const maxQScore = q.rubricSteps?.reduce((acc: number, step: any) => acc + (step.maxScore || 0), 0) || 0;
+                          const statusInfo = getSubmissionStatusInfo(sub);
+                          const isSubmitted = sub && sub.status !== 'NOT_SUBMITTED';
+
+                          return (
+                            <tr
+                              key={q.id}
+                              onClick={() => setSelectedQuestionForStudent(q)}
+                              style={{ cursor: 'pointer', transition: 'background-color 0.15s ease' }}
+                            >
+                              <td style={{ textAlign: 'center', fontWeight: '600' }}>{idx + 1}</td>
+                              <td>
+                                <div style={{ fontWeight: '600', color: 'var(--text-primary)' }}>
+                                  {q.name || `Câu ${idx + 1}`}
+                                </div>
+                                <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '400px' }}>
+                                  {q.content?.replace(/\$+/g, '').slice(0, 70)}...
+                                </div>
+                              </td>
+                              <td style={{ textAlign: 'center', fontWeight: '600' }}>
+                                {sub?.status === 'GRADED' || (sub?.isPublished && sub?.evaluation) ? (
+                                  <span style={{ color: '#10b981' }}>
+                                    {formatScore(sub.evaluation?.totalScore || 0)} / {formatScore(maxQScore)} đ
+                                  </span>
+                                ) : (
+                                  <span style={{ color: 'var(--text-muted)' }}>
+                                    - / {formatScore(maxQScore)} đ
+                                  </span>
+                                )}
+                              </td>
+                              <td style={{ textAlign: 'center' }}>
+                                <span className={statusInfo.className}>{statusInfo.label}</span>
+                              </td>
+                              <td style={{ textAlign: 'center' }}>
+                                <button
+                                  className={`btn ${isSubmitted ? 'btn-secondary' : 'btn-primary'}`}
+                                  style={{ padding: '6px 14px', fontSize: '12px', borderRadius: '6px' }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedQuestionForStudent(q);
+                                  }}
+                                >
+                                  {isSubmitted ? 'Xem bài làm →' : 'Nộp bài →'}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {(!selectedExam.questions || selectedExam.questions.length === 0) && (
+                          <tr>
+                            <td colSpan={5} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '24px' }}>
+                              Kỳ thi này hiện chưa có câu hỏi nào.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* VIEW 2: SINGLE QUESTION DETAIL & SUBMISSION */
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                {/* Back button and quick navigation */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setSelectedQuestionForStudent(null);
+                      setSelectedFile(null);
+                      setUploadProgress('');
+                    }}
+                    style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                  >
+                    <ChevronLeft size={18} />
+                    Quay lại danh sách câu hỏi
+                  </button>
+
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    {(() => {
+                      const currentIdx = selectedExam.questions.findIndex((x: any) => x.id === selectedQuestionForStudent.id);
+                      const prevQ = currentIdx > 0 ? selectedExam.questions[currentIdx - 1] : null;
+                      const nextQ = currentIdx < selectedExam.questions.length - 1 ? selectedExam.questions[currentIdx + 1] : null;
+                      return (
+                        <>
+                          <button
+                            className="btn btn-secondary"
+                            disabled={!prevQ}
+                            onClick={() => {
+                              setSelectedQuestionForStudent(prevQ);
+                              setSelectedFile(null);
+                              setUploadProgress('');
+                            }}
+                            style={{ fontSize: '13px', padding: '6px 12px' }}
+                          >
+                            ← Câu trước
+                          </button>
+                          <button
+                            className="btn btn-secondary"
+                            disabled={!nextQ}
+                            onClick={() => {
+                              setSelectedQuestionForStudent(nextQ);
+                              setSelectedFile(null);
+                              setUploadProgress('');
+                            }}
+                            style={{ fontSize: '13px', padding: '6px 12px' }}
+                          >
+                            Câu tiếp theo →
+                          </button>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+
+                {/* Selected Question Detail Card */}
+                {(() => {
+                  const q = selectedQuestionForStudent;
+                  const sub = q.submissions?.[0];
+                  const maxQScore = q.rubricSteps?.reduce((acc: number, step: any) => acc + (step.maxScore || 0), 0) || 0;
+                  const statusInfo = getSubmissionStatusInfo(sub);
+                  const qIdx = selectedExam.questions.findIndex((x: any) => x.id === q.id);
+
+                  return (
+                    <div className="panel-card" style={{ borderLeft: '4px solid var(--primary-color)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid var(--border-color)', paddingBottom: '14px' }}>
+                        <div>
+                          <h2 style={{ margin: '0 0 4px 0', fontSize: '20px' }}>
+                            {q.name || `Câu ${qIdx + 1}`}
+                          </h2>
+                          <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
+                            Điểm tối đa của câu: <strong style={{ color: 'var(--primary-color)' }}>{formatScore(maxQScore)}đ</strong>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <span className={statusInfo.className} style={{ fontSize: '13px', padding: '6px 14px' }}>
+                            {statusInfo.label}
+                          </span>
+                          {sub?.status === 'GRADED' && (
+                            <span className="badge badge-success" style={{ fontSize: '13px', padding: '6px 14px' }}>
+                              Đạt: {formatScore(sub.evaluation?.totalScore || 0)}đ
+                            </span>
                           )}
                         </div>
                       </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+
+                      {/* Math Question Problem Statement */}
+                      <div style={{ marginBottom: '24px' }}>
+                        <div className="form-label" style={{ marginBottom: '8px', fontSize: '14px', fontWeight: 600 }}>
+                          Đề bài:
+                        </div>
+                        <div className="step-math" style={{ padding: '16px', borderRadius: '8px', backgroundColor: 'rgba(255,255,255,0.02)' }}>
+                          <MathRenderer math={q.content} />
+                        </div>
+                      </div>
+
+                      {/* Submit Section or Submitted View */}
+                      {(!sub || sub.status === 'NOT_SUBMITTED') ? (
+                        <div style={{ backgroundColor: 'rgba(255,255,255,0.01)', border: '2px dashed var(--border-color)', borderRadius: '12px', padding: '32px 24px', textAlign: 'center' }}>
+                          <Upload size={36} style={{ color: 'var(--primary-color)', marginBottom: '12px' }} />
+                          <h4 style={{ marginBottom: '8px' }}>Tải ảnh bài làm tự luận của bạn cho câu hỏi này</h4>
+                          <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '20px' }}>
+                            Chấp nhận định dạng ảnh PNG, JPG, JPEG (chụp rõ nét phần trình bày lời giải)
+                          </p>
+
+                          <div style={{ display: 'flex', justifyContent: 'center', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                              style={{ display: 'none' }}
+                              id={`file-upload-${q.id}`}
+                            />
+                            <label htmlFor={`file-upload-${q.id}`} className="btn btn-secondary" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <Upload size={16} /> Chọn ảnh bài làm
+                            </label>
+                            {selectedFile && (
+                              <span style={{ fontSize: '13px', fontWeight: '500', color: 'var(--primary-color)' }}>
+                                📄 {selectedFile.name}
+                              </span>
+                            )}
+
+                            <button
+                              className="btn btn-primary"
+                              onClick={() => handleStudentUpload(q.id)}
+                              disabled={!selectedFile}
+                              style={{ padding: '8px 20px' }}
+                            >
+                              Tải lên & Nộp bài
+                            </button>
+                          </div>
+                          {uploadProgress && (
+                            <div style={{ marginTop: '16px', fontSize: '14px', color: 'var(--primary-color)', fontWeight: 'bold' }}>
+                              {uploadProgress}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div>
+                          <div style={{ display: 'flex', gap: '24px', alignItems: 'start', flexWrap: 'wrap' }}>
+                            <div style={{ flex: 1, minWidth: '320px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                                <div className="form-label" style={{ margin: 0, fontWeight: 600 }}>Bài làm đã nộp:</div>
+                                {sub.submittedAt && (
+                                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                                    Thời gian nộp: {new Date(sub.submittedAt).toLocaleString('vi-VN')}
+                                  </div>
+                                )}
+                              </div>
+
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center', marginBottom: '16px' }}>
+                                <a
+                                  href={sub.imageUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="btn btn-secondary"
+                                  style={{ display: 'inline-flex', alignItems: 'center', textDecoration: 'none', fontSize: '12px', padding: '6px 12px', gap: '6px' }}
+                                >
+                                  <Eye size={14} /> Xem ảnh gốc (Tab mới)
+                                </a>
+                                <button
+                                  className="btn btn-secondary"
+                                  style={{ backgroundColor: '#ef4444', color: 'white', border: 'none', fontSize: '12px', padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                                  onClick={() => handleDeleteSubmission(sub.id)}
+                                >
+                                  <Trash size={14} /> Gỡ bài làm để nộp lại
+                                </button>
+                              </div>
+
+                              <div>
+                                <ImageViewerWithBbox
+                                  imageUrl={sub.imageUrl}
+                                  bboxes={sub.ocrBboxes}
+                                  ocrStatus={sub.ocrStatus}
+                                  ocrContent={sub.ocrContent}
+                                  altText="Bài làm của bạn"
+                                />
+                              </div>
+                            </div>
+
+                            {/* Graded Details display */}
+                            {sub.isPublished && sub.evaluation && (
+                              <div style={{ flex: 1.2, minWidth: '320px' }}>
+                                <h4 style={{ marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <CheckCircle size={18} style={{ color: '#10b981' }} />
+                                  Phân tích kết quả chấm điểm từng bước:
+                                </h4>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                  {sub.evaluation.stepEvaluations?.map((step: any, sIdx: number) => (
+                                    <div key={step.id} className={`step-item ${step.isMarkedIncorrect ? 'incorrect' : 'correct'}`}>
+                                      <div className="step-header">
+                                        <span className="step-title">Bước {sIdx + 1}</span>
+                                        <span className={`badge ${step.isMarkedIncorrect ? 'badge-error' : 'badge-success'}`}>
+                                          {step.isMarkedIncorrect ? 'Sai sót logic' : 'Chính xác'}
+                                        </span>
+                                      </div>
+                                      <div className="step-reasoning">
+                                        <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>AI Nhận xét:</div>
+                                        <div>{step.aiReasoning}</div>
+                                        {step.teacherFeedback && (
+                                          <div style={{ marginTop: '8px', borderTop: '1px solid var(--border-color)', paddingTop: '6px', color: 'var(--primary-color)' }}>
+                                            <strong>Phản hồi từ Giáo viên:</strong> {step.teacherFeedback}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
           </div>
         )}
 

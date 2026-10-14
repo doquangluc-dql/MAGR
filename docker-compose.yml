@@ -60,6 +60,8 @@ services:
       S3_BUCKET: "${S3_BUCKET}"
       AWS_REGION: "${AWS_REGION}"
       JWT_SECRET: "${JWT_SECRET}"
+      MODAL_OCR_URL: "${MODAL_OCR_URL}"
+      MODAL_WORKER_URL: "${MODAL_WORKER_URL}"
     depends_on:
       postgres-db:
         condition: service_healthy
@@ -92,7 +94,6 @@ services:
     restart: always
     ports:
       - "80:80"
-      - "5173:80"
     depends_on:
       - nestjs-api
     networks:

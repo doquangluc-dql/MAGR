@@ -30,7 +30,7 @@ export class ExamsController {
   @Roles(Role.TEACHER)
   @Post(':id/students')
   async enrollStudents(@Param('id') id: string, @Body() dto: EnrollStudentsDto) {
-    return this.examsService.enrollStudents(id, dto.studentIds, dto.email);
+    return this.examsService.enrollStudents(id, dto.studentIds, dto.email, dto.name, dto.isNewAccount);
   }
 
   @Roles(Role.TEACHER)

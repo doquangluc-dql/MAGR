@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { Role } from '@prisma/client';
 
@@ -97,7 +97,13 @@ export class ExamsService {
     return exam;
   }
 
-  async enrollStudents(examId: string, studentIds?: string[], email?: string) {
+  async enrollStudents(
+    examId: string,
+    studentIds?: string[],
+    email?: string,
+    name?: string,
+    isNewAccount?: boolean,
+  ) {
     // Verify exam exists
     const exam = await this.prisma.exam.findUnique({ where: { id: examId } });
     if (!exam) {
@@ -107,13 +113,59 @@ export class ExamsService {
     let targetStudentIds: string[] = [];
 
     if (email) {
-      const student = await this.prisma.user.findFirst({
-        where: { email, role: Role.STUDENT },
-      });
-      if (!student) {
-        throw new NotFoundException('Student not found with this email');
+      const cleanEmail = email.trim().toLowerCase();
+
+      if (isNewAccount) {
+        // Kiểm tra xem email này đã tồn tại trong hệ thống chưa
+        const existingUser = await this.prisma.user.findFirst({
+          where: { email: cleanEmail },
+        });
+
+        if (existingUser) {
+          throw new ConflictException(
+            `Email "${cleanEmail}" đã tồn tại trong hệ thống. Vui lòng chọn "Đã có tài khoản" để thêm vào kỳ thi.`,
+          );
+        }
+
+        const bcrypt = require('bcrypt');
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash('123456', saltRounds);
+        const studentName = name?.trim() || cleanEmail.split('@')[0];
+
+        const newUser = await this.prisma.user.create({
+          data: {
+            email: cleanEmail,
+            name: studentName,
+            password: hashedPassword,
+            role: Role.STUDENT,
+          },
+        });
+
+        targetStudentIds = [newUser.id];
+      } else {
+        const student = await this.prisma.user.findFirst({
+          where: { email: cleanEmail, role: Role.STUDENT },
+        });
+
+        if (!student) {
+          const userWithOtherRole = await this.prisma.user.findFirst({
+            where: { email: cleanEmail },
+          });
+          if (userWithOtherRole) {
+            throw new BadRequestException('Tài khoản này không phải là học sinh.');
+          }
+          throw new NotFoundException('Không tìm thấy học sinh với email này. Nếu học sinh chưa có tài khoản, vui lòng chọn "Chưa có tài khoản".');
+        }
+
+        const alreadyEnrolled = await this.prisma.examStudent.findUnique({
+          where: { examId_studentId: { examId, studentId: student.id } },
+        });
+        if (alreadyEnrolled) {
+          throw new BadRequestException('Học sinh này đã được thêm vào kỳ thi từ trước.');
+        }
+
+        targetStudentIds = [student.id];
       }
-      targetStudentIds = [student.id];
     } else if (studentIds && studentIds.length > 0) {
       const users = await this.prisma.user.findMany({
         where: {
