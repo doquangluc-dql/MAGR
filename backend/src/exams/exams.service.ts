@@ -92,6 +92,14 @@ export class ExamsService {
       if (!isEnrolled) {
         throw new BadRequestException('Not enrolled in this exam');
       }
+      // Học sinh chỉ thấy bài chép (Gemini) sau khi giáo viên công bố điểm
+      for (const q of exam.questions) {
+        for (const sub of q.submissions) {
+          if (!sub.isPublished) {
+            sub.transcript = null;
+          }
+        }
+      }
     }
 
     return exam;

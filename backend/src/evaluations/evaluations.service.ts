@@ -1,11 +1,24 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { OverrideEvaluationDto } from './dto/evaluation.dto';
-import { Role, SubmissionStatus } from '@prisma/client';
+import { Prisma, Role, SubmissionStatus } from '@prisma/client';
 
 @Injectable()
 export class EvaluationsService {
   constructor(private prisma: PrismaService) {}
+
+  // Kết thúc trạng thái "Đang chờ chấm" (GRADING) khi AI worker trả về kết quả hoặc lỗi.
+  // Bài đã công bố trước đó quay về GRADED, còn lại quay về SUBMITTED.
+  private async finishGrading(
+    tx: Prisma.TransactionClient,
+    submissionId: string,
+    isPublished: boolean,
+  ) {
+    await tx.submission.updateMany({
+      where: { id: submissionId, status: SubmissionStatus.GRADING },
+      data: { status: isPublished ? SubmissionStatus.GRADED : SubmissionStatus.SUBMITTED },
+    });
+  }
 
   async saveAiEvaluation(data: {
     submission_id: string;
@@ -60,6 +73,8 @@ export class EvaluationsService {
           }),
         ),
       );
+
+      await this.finishGrading(tx, submission.id, submission.isPublished);
 
       console.log(`Saved AI evaluation for submission ${data.submission_id}`);
       return evaluation;
@@ -123,6 +138,8 @@ export class EvaluationsService {
           ),
         );
       }
+
+      await this.finishGrading(tx, submissionId, submission.isPublished);
 
       console.log(`Saved AI evaluation error for submission ${submissionId}: ${errorMessage}`);
       return evaluation;

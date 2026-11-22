@@ -46,6 +46,14 @@ export class SubmissionsController {
     return this.submissionsService.triggerGrading(dto.submissionIds);
   }
 
+  // Chép lại bài làm bằng Gemini (bỏ qua bài chép đã lưu)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.TEACHER)
+  @Post(':id/transcribe')
+  async retranscribe(@Param('id') id: string) {
+    return this.submissionsService.retranscribe(id);
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.TEACHER)
   @Get('question/:questionId')

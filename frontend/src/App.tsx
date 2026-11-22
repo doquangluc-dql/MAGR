@@ -28,6 +28,11 @@ import {
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { MathRenderer } from './components/MathRenderer';
 import { ImageViewerWithBbox } from './components/ImageViewerWithBbox';
+import { QuestionStudentTable } from './components/QuestionStudentTable';
+import { TranscriptPanel, getValidTranscript } from './components/TranscriptPanel';
+import { TeacherAppealsPanel } from './components/TeacherAppealsPanel';
+import { StudentAppealPanel } from './components/StudentAppealPanel';
+import { formatScore, isEvaluationError, getEvaluationErrorMessage, needsGrading } from './utils/submissionStatus';
 
 // Configure Axios defaults
 // Cấu hình URL gọi tới Backend (Render hoặc Localhost)
@@ -101,7 +106,7 @@ const DashboardContent: React.FC = () => {
 
   // UI Control States
   const [showCreateExamForm, setShowCreateExamForm] = useState(false);
-  const [examSubTab, setExamSubTab] = useState<'questions' | 'students'>('questions');
+  const [examSubTab, setExamSubTab] = useState<'questions' | 'students' | 'appeals'>('questions');
   const [showAddQuestionForm, setShowAddQuestionForm] = useState(false);
   const [showEnrollStudentForm, setShowEnrollStudentForm] = useState(false);
   const [isEditingExam, setIsEditingExam] = useState(false);
@@ -110,19 +115,9 @@ const DashboardContent: React.FC = () => {
   const [editingQuestion, setEditingQuestion] = useState<any>(null);
   const [selectedQuestionForStudent, setSelectedQuestionForStudent] = useState<any>(null);
 
-  const formatScore = (num: number) => {
-    const str = num.toString();
-    return str.includes('.') ? str : num.toFixed(1);
-  };
-
-  const isEvaluationError = (evaluation: any) => {
-    return evaluation?.stepEvaluations?.some((s: any) => s.aiReasoning?.startsWith('[LỖI CHẤM BÀI]'));
-  };
-
-  const getEvaluationErrorMessage = (evaluation: any) => {
-    const errStep = evaluation?.stepEvaluations?.find((s: any) => s.aiReasoning?.startsWith('[LỖI CHẤM BÀI]'));
-    return errStep ? errStep.aiReasoning.replace('[LỖI CHẤM BÀI] ', '') : 'Mô hình AI chấm bài gặp lỗi.';
-  };
+  const [examAppeals, setExamAppeals] = useState<any[]>([]);
+  const [selectedForGrading, setSelectedForGrading] = useState<Set<string>>(new Set());
+  const [hoveredBoxId, setHoveredBoxId] = useState<string | null>(null);
 
   const getSubmissionStatusInfo = (sub: any) => {
     if (!sub || sub.status === 'NOT_SUBMITTED') {
@@ -143,7 +138,8 @@ const DashboardContent: React.FC = () => {
         className: 'badge badge-warning'
       };
     }
-    if (sub.status === 'SUBMITTED') {
+    // GRADING là trạng thái nội bộ phía giáo viên; học sinh vẫn chỉ thấy "Đã nộp"
+    if (sub.status === 'SUBMITTED' || sub.status === 'GRADING') {
       return {
         label: 'Đã nộp',
         className: 'badge badge-info'
@@ -199,11 +195,17 @@ const DashboardContent: React.FC = () => {
     e.preventDefault();
     if (!newExamTitle) return;
     try {
-      await axios.post('/exams', { title: newExamTitle });
+      const res = await axios.post('/exams', { title: newExamTitle });
       setNewExamTitle('');
-      fetchExams();
-    } catch (err) {
-      alert('Không thể tạo kỳ thi');
+      await fetchExams();
+      // Mở luôn kỳ thi vừa tạo, thay vì đứng yên ở form (trước đây trông như không tạo được)
+      if (res.data?.id) {
+        await handleSelectExam(res.data.id);
+      }
+    } catch (err: any) {
+      const status = err.response?.status;
+      const detail = err.response?.data?.message || err.message;
+      alert(`Không thể tạo kỳ thi${status ? ` (HTTP ${status})` : ''}: ${detail}`);
     }
   };
 
@@ -220,6 +222,9 @@ const DashboardContent: React.FC = () => {
       setShowEnrollStudentForm(false);
       setSelectedQuestionForSubmissions(null);
       setEditingQuestion(null);
+      if (user?.role === 'TEACHER') {
+        loadExamAppeals(examId);
+      }
 
       if (keepSelectedQuestionId) {
         const foundQ = examData.questions?.find((x: any) => x.id === keepSelectedQuestionId);
@@ -386,15 +391,103 @@ const DashboardContent: React.FC = () => {
     }
   };
 
+  const loadExamAppeals = async (examId: string) => {
+    try {
+      const res = await axios.get(`/appeals/exam/${examId}`);
+      setExamAppeals(res.data);
+    } catch (err) {
+      console.error('Không tải được phản ánh của kỳ thi', err);
+      setExamAppeals([]);
+    }
+  };
+
+  // Tải lại dữ liệu kỳ thi + bài nộp của câu đang chọn mà không reset giao diện
+  const refreshTeacherExamData = async () => {
+    if (!selectedExam) return;
+    try {
+      const res = await axios.get(`/exams/${selectedExam.id}`);
+      setSelectedExam(res.data);
+      if (selectedQuestionForSubmissions) {
+        const subsRes = await axios.get(`/submissions/question/${selectedQuestionForSubmissions.id}`);
+        setSubmissions(subsRes.data);
+      }
+    } catch (err) {
+      console.error('Không thể làm mới dữ liệu kỳ thi', err);
+    }
+  };
+
+  // Trang chấm bài của một câu hỏi: gửi AI chấm các bài giáo viên đã tích chọn
+  const handleGradeSelected = async () => {
+    const chosen = submissions.filter((s: any) => selectedForGrading.has(s.id));
+    if (chosen.length === 0) return;
+    const regrade = chosen.filter((s: any) => s.evaluation && !isEvaluationError(s.evaluation)).length;
+    const msg = `Gửi AI chấm ${chosen.length} bài đã chọn?` +
+      (regrade > 0 ? `\n\nLưu ý: ${regrade} bài đã có điểm sẽ bị chấm lại và ghi đè kết quả cũ (kể cả điểm giáo viên đã sửa).` : '');
+    if (!window.confirm(msg)) return;
+
+    try {
+      await axios.post('/submissions/trigger-grading', { submissionIds: chosen.map((s: any) => s.id) });
+      setSelectedForGrading(new Set());
+      await refreshTeacherExamData();
+      setTimeout(refreshTeacherExamData, 10000);
+      setTimeout(refreshTeacherExamData, 30000);
+    } catch (err: any) {
+      alert('Lỗi kích hoạt chấm điểm: ' + (err.response?.data?.message || err.message));
+    }
+  };
+
+  // Từ một phản ánh, mở trang chấm chi tiết của bài nộp tương ứng
+  const handleOpenAppealSubmission = async (questionId: string, submissionId: string) => {
+    try {
+      const res = await axios.get(`/submissions/question/${questionId}`);
+      const q = selectedExam?.questions?.find((x: any) => x.id === questionId);
+      setSelectedQuestionForSubmissions(q || null);
+      setSubmissions(res.data);
+      const sub = res.data.find((s: any) => s.id === submissionId);
+      if (sub) handleSelectSubmissionForGrading(sub);
+    } catch (err) {
+      alert('Không thể mở bài nộp');
+    }
+  };
+
+  // Lấy lại trạng thái chép bài của bài đang mở (giữ nguyên phần đánh giá đã tải)
+  const reloadSelectedTranscript = async (): Promise<string | null> => {
+    if (!selectedSubmission) return null;
+    const res = await axios.get(`/submissions/question/${selectedSubmission.questionId}`);
+    const fresh = res.data.find((s: any) => s.id === selectedSubmission.id);
+    if (!fresh) return null;
+    setSelectedSubmission((prev: any) =>
+      prev && prev.id === fresh.id
+        ? { ...prev, transcript: fresh.transcript, transcriptStatus: fresh.transcriptStatus, ocrBboxes: fresh.ocrBboxes, ocrStatus: fresh.ocrStatus }
+        : prev,
+    );
+    return fresh.transcriptStatus;
+  };
+
+  const handleRetranscribe = async () => {
+    if (!selectedSubmission) return;
+    try {
+      await axios.post(`/submissions/${selectedSubmission.id}/transcribe`);
+      setSelectedSubmission((prev: any) => ({ ...prev, transcriptStatus: 'PROCESSING' }));
+      // Hỏi lại mỗi 3 giây cho tới khi chép xong (tối đa ~3 phút, có thể phải chờ GPU OCR)
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const status = await reloadSelectedTranscript();
+        if (status !== 'PROCESSING') break;
+      }
+    } catch (err: any) {
+      alert('Không thể chép bài: ' + (err.response?.data?.message || err.message));
+    }
+  };
+
   const handleLoadSubmissions = async (questionId: string) => {
     const q = selectedExam?.questions?.find((x: any) => x.id === questionId);
     setSelectedQuestionForSubmissions(q);
     try {
       const res = await axios.get(`/submissions/question/${questionId}`);
       setSubmissions(res.data);
-      setTimeout(() => {
-        document.getElementById('submissions-section')?.scrollIntoView({ behavior: 'smooth' });
-      }, 100);
+      setSelectedForGrading(new Set());
+      setActiveTab('question-grading');
     } catch (err) {
       alert('Không thể tải danh sách bài nộp');
     }
@@ -484,7 +577,8 @@ const DashboardContent: React.FC = () => {
         }
       };
 
-      // Tự động refresh sau 3 giây và 7 giây
+      // Refresh ngay để hiện "Đang chờ chấm", rồi refresh lại sau 3 giây và 7 giây
+      refreshSubmission();
       setTimeout(refreshSubmission, 3000);
       setTimeout(refreshSubmission, 7000);
     } catch (err: any) {
@@ -680,6 +774,7 @@ const DashboardContent: React.FC = () => {
               {activeTab === 'exams' && 'Quản lý kỳ thi'}
               {activeTab === 'student-exams' && 'Kỳ thi của tôi'}
               {activeTab === 'grading' && 'Chấm điểm bài làm'}
+              {activeTab === 'question-grading' && 'Chấm bài theo câu hỏi'}
             </span>
           </div>
           <button className="btn-icon" onClick={toggleTheme} title="Giao diện Sáng/Tối">
@@ -810,7 +905,29 @@ const DashboardContent: React.FC = () => {
               >
                 Danh sách học sinh
               </button>
+              <button
+                className={`btn ${examSubTab === 'appeals' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ padding: '8px 16px', borderRadius: '20px' }}
+                onClick={() => { setExamSubTab('appeals'); loadExamAppeals(selectedExam.id); }}
+              >
+                Giải đáp thắc mắc
+                {examAppeals.filter((a) => a.status === 'OPEN').length > 0 && (
+                  <span className="badge badge-warning" style={{ marginLeft: '6px', fontSize: '11px', padding: '1px 7px' }}>
+                    {examAppeals.filter((a) => a.status === 'OPEN').length}
+                  </span>
+                )}
+              </button>
             </div>
+
+            {/* Sub-tab 3: APPEALS */}
+            {examSubTab === 'appeals' && (
+              <TeacherAppealsPanel
+                appeals={examAppeals}
+                questions={selectedExam.questions || []}
+                onChanged={() => loadExamAppeals(selectedExam.id)}
+                onOpenSubmission={handleOpenAppealSubmission}
+              />
+            )}
 
             {/* Sub-tab 1: QUESTIONS */}
             {examSubTab === 'questions' && (
@@ -852,7 +969,7 @@ const DashboardContent: React.FC = () => {
                         const gradedCount = q.submissions?.filter((s: any) => s.status === 'GRADED').length || 0;
 
                         return (
-                          <tr key={q.id} onClick={() => { setEditingQuestion(JSON.parse(JSON.stringify(q))); setActiveTab('edit-question'); }} style={{ cursor: 'pointer' }}>
+                          <tr key={q.id} onClick={() => handleLoadSubmissions(q.id)} style={{ cursor: 'pointer' }}>
                             <td style={{ width: '60px' }}>{qIdx + 1}</td>
                             <td style={{ fontWeight: '600' }}>{q.name || `Câu hỏi ${qIdx + 1}`}</td>
                             <td style={{ fontWeight: 'bold', color: 'var(--primary-color)' }}>{formatScore(maxScore)}đ</td>
@@ -860,8 +977,8 @@ const DashboardContent: React.FC = () => {
                             <td>{gradedCount}</td>
                             <td>
                               <div style={{ display: 'flex', gap: '8px' }}>
-                                <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '13px' }} onClick={(e) => { e.stopPropagation(); handleLoadSubmissions(q.id); }}>
-                                  Xem bài nộp
+                                <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '13px' }} onClick={(e) => { e.stopPropagation(); setEditingQuestion(JSON.parse(JSON.stringify(q))); setActiveTab('edit-question'); }}>
+                                  Chỉnh sửa barem
                                 </button>
                                 <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '13px', backgroundColor: '#ef4444', color: 'white' }} onClick={(e) => { e.stopPropagation(); handleDeleteQuestion(q.id); }}>
                                   Xóa
@@ -1081,86 +1198,6 @@ const DashboardContent: React.FC = () => {
               </div>
             )}
 
-            {/* List Submissions Section */}
-            {selectedQuestionForSubmissions && (
-              <div id="submissions-section" style={{ marginTop: '40px' }}>
-                <h3>Danh sách bài nộp của học sinh (Câu hỏi #{selectedExam.questions?.findIndex((x: any) => x.id === selectedQuestionForSubmissions.id) + 1})</h3>
-                {submissions.length === 0 ? (
-                  <div style={{ padding: '24px', backgroundColor: 'rgba(255,255,255,0.01)', border: '1px dashed var(--border-color)', borderRadius: '8px', textAlign: 'center', color: 'var(--text-muted)', marginTop: '16px' }}>
-                    Chưa có học sinh nào nộp bài cho câu hỏi này.
-                  </div>
-                ) : (
-                  <div className="table-container" style={{ marginTop: '16px' }}>
-                    <table className="app-table">
-                      <thead>
-                        <tr>
-                          <th>Học sinh</th>
-                          <th>Ảnh bài nộp</th>
-                          <th>Trạng thái</th>
-                          <th>OCR AI</th>
-                          <th>Công bố</th>
-                          <th>Điểm AI</th>
-                          <th>Thao tác</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {submissions.map((sub) => (
-                          <tr key={sub.id}>
-                            <td style={{ fontWeight: '600' }}>{sub.student?.name}</td>
-                            <td style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                              <a href={sub.imageUrl} target="_blank" rel="noreferrer" style={{ textDecoration: 'underline', color: 'var(--primary-color)' }}>
-                                Xem ảnh S3
-                              </a>
-                            </td>
-                            <td>
-                              {sub.status === 'NOT_SUBMITTED' && <span className="badge badge-error">Chưa nộp</span>}
-                              {sub.status === 'SUBMITTED' && !isEvaluationError(sub.evaluation) && <span className="badge badge-warning">Đang chờ chấm</span>}
-                              {sub.status === 'GRADED' && !isEvaluationError(sub.evaluation) && <span className="badge badge-success">Đã chấm điểm</span>}
-                              {isEvaluationError(sub.evaluation) && (
-                                <span className="badge badge-error" style={{ backgroundColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', border: '1px solid #ef4444' }} title={getEvaluationErrorMessage(sub.evaluation)}>
-                                  Lỗi AI chấm
-                                </span>
-                              )}
-                            </td>
-                            <td>
-                              {sub.ocrStatus === 'PROCESSING' && <span className="badge badge-warning" style={{ backgroundColor: 'rgba(56,189,248,0.2)', color: '#38bdf8' }}>Đang OCR...</span>}
-                              {sub.ocrStatus === 'COMPLETED' && <span className="badge badge-success" style={{ backgroundColor: 'rgba(52,211,153,0.2)', color: '#34d399' }}>Đã OCR</span>}
-                              {sub.ocrStatus === 'FAILED' && <span className="badge badge-error">Lỗi OCR</span>}
-                              {(!sub.ocrStatus || sub.ocrStatus === 'PENDING') && <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>Chờ OCR</span>}
-                            </td>
-                            <td>
-                              {sub.isPublished ? (
-                                <span style={{ color: 'var(--success-color)' }}>Đã công bố</span>
-                              ) : (
-                                <span style={{ color: 'var(--text-muted)' }}>Chưa công bố</span>
-                              )}
-                            </td>
-                            <td style={{ fontWeight: 'bold' }}>
-                              {sub.evaluation ? (
-                                isEvaluationError(sub.evaluation) ? (
-                                  <span style={{ color: '#ef4444', fontSize: '13px' }} title={getEvaluationErrorMessage(sub.evaluation)}>
-                                    Chấm lỗi
-                                  </span>
-                                ) : (
-                                  `${formatScore(sub.evaluation.totalScore)}đ`
-                                )
-                              ) : (
-                                '---'
-                              )}
-                            </td>
-                            <td>
-                              <button className="btn btn-secondary" onClick={() => handleSelectSubmissionForGrading(sub)}>
-                                Chấm điểm & Duyệt
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         )}
 
@@ -1524,9 +1561,18 @@ const DashboardContent: React.FC = () => {
                                 <ImageViewerWithBbox
                                   imageUrl={sub.imageUrl}
                                   bboxes={sub.ocrBboxes}
+                                  regions={getValidTranscript(sub)?.regions}
+                                  hoveredBoxId={hoveredBoxId}
+                                  onHoverBox={setHoveredBoxId}
                                   ocrStatus={sub.ocrStatus}
                                   ocrContent={sub.ocrContent}
                                   altText="Bài làm của bạn"
+                                />
+                                <TranscriptPanel
+                                  submission={sub}
+                                  readOnly
+                                  hoveredBoxId={hoveredBoxId}
+                                  onHoverBox={setHoveredBoxId}
                                 />
                               </div>
                             </div>
@@ -1567,17 +1613,86 @@ const DashboardContent: React.FC = () => {
                     </div>
                   );
                 })()}
+                {/* Phản ánh kết quả chấm (chọn câu hỏi, ý chấm, mô tả) */}
+                <StudentAppealPanel
+                  examId={selectedExam.id}
+                  questions={selectedExam.questions || []}
+                  defaultQuestionId={selectedQuestionForStudent?.id}
+                />
               </div>
             )}
           </div>
         )}
 
+        {/* TAB: CHẤM BÀI THEO CÂU HỎI (danh sách học sinh + chọn bài để AI chấm) */}
+        {activeTab === 'question-grading' && (
+          selectedExam && selectedQuestionForSubmissions ? (
+            <div>
+              <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                <div>
+                  <h1 className="page-title">
+                    Chấm bài: {selectedQuestionForSubmissions.name || `Câu ${selectedExam.questions?.findIndex((x: any) => x.id === selectedQuestionForSubmissions.id) + 1}`}
+                  </h1>
+                  <p className="page-subtitle">{selectedExam.title}</p>
+                </div>
+                <button className="btn btn-secondary" onClick={() => { setActiveTab('exams'); setExamSubTab('questions'); }}>
+                  <ChevronLeft size={16} style={{ marginRight: '4px' }} /> Quay lại danh sách câu hỏi
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button className="btn btn-primary" disabled={selectedForGrading.size === 0} onClick={handleGradeSelected}>
+                  Chấm {selectedForGrading.size > 0 ? `${selectedForGrading.size} ` : ''}bài đã chọn
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => setSelectedForGrading(new Set(submissions.filter(needsGrading).map((s: any) => s.id)))}
+                >
+                  Chọn tất cả bài chưa chấm
+                </button>
+                {selectedForGrading.size > 0 && (
+                  <button className="btn btn-secondary" onClick={() => setSelectedForGrading(new Set())}>Bỏ chọn</button>
+                )}
+                <button className="btn btn-secondary" onClick={refreshTeacherExamData} style={{ marginLeft: 'auto' }}>
+                  Làm mới
+                </button>
+              </div>
+
+              <QuestionStudentTable
+                enrollments={selectedExam.students || []}
+                submissions={submissions}
+                openAppealsBySubmission={examAppeals
+                  .filter((a) => a.status === 'OPEN')
+                  .reduce((acc: Record<string, number>, a) => {
+                    acc[a.submissionId] = (acc[a.submissionId] || 0) + 1;
+                    return acc;
+                  }, {})}
+                onOpenGrading={handleSelectSubmissionForGrading}
+                selectedIds={selectedForGrading}
+                onSelectionChange={setSelectedForGrading}
+              />
+            </div>
+          ) : (
+            <div className="panel-card" style={{ textAlign: 'center', padding: '40px' }}>
+              <p style={{ marginBottom: '16px' }}>Chưa chọn câu hỏi để chấm.</p>
+              <button className="btn btn-primary" onClick={() => setActiveTab(selectedExam ? 'exams' : 'home')}>Về trang kỳ thi</button>
+            </div>
+          )
+        )}
+
         {/* TAB 4: TEACHER GRADING INTERFACE */}
         {activeTab === 'grading' && selectedSubmission && (
           <div>
-            <div className="page-header">
-              <h1 className="page-title">Bài làm: {selectedSubmission.student?.name}</h1>
-              <p className="page-subtitle">Chi tiết bài làm và giao diện điều chỉnh barem điểm AI</p>
+            <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+              <div>
+                <h1 className="page-title">Bài làm: {selectedSubmission.student?.name}</h1>
+                <p className="page-subtitle">Chi tiết bài làm và giao diện điều chỉnh barem điểm AI</p>
+              </div>
+              {selectedQuestionForSubmissions && (
+                <button className="btn btn-secondary" onClick={async () => { setActiveTab('question-grading'); await refreshTeacherExamData(); }}>
+                  <ChevronLeft size={16} style={{ marginRight: '4px' }} /> Quay lại danh sách học sinh
+                </button>
+              )}
             </div>
 
             <div className="grading-split">
@@ -1586,9 +1701,18 @@ const DashboardContent: React.FC = () => {
                 <ImageViewerWithBbox
                   imageUrl={selectedSubmission.imageUrl}
                   bboxes={selectedSubmission.ocrBboxes}
+                  regions={getValidTranscript(selectedSubmission)?.regions}
+                  hoveredBoxId={hoveredBoxId}
+                  onHoverBox={setHoveredBoxId}
                   ocrStatus={selectedSubmission.ocrStatus}
                   ocrContent={selectedSubmission.ocrContent}
                   altText={`Bài làm của ${selectedSubmission.student?.name || 'học sinh'}`}
+                />
+                <TranscriptPanel
+                  submission={selectedSubmission}
+                  hoveredBoxId={hoveredBoxId}
+                  onHoverBox={setHoveredBoxId}
+                  onRetranscribe={handleRetranscribe}
                 />
               </div>
 

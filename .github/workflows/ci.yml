@@ -100,4 +100,4 @@ jobs:
 
       - name: Python Syntax Verification
         working-directory: ./ai-worker
-        run: python -m py_compile modal_worker.py ocr_client.py
+        run: python -m py_compile modal_worker.py ocr_client.py transcriber.py

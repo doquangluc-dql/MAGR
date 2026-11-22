@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 
 # Kế thừa hàm OCR mà bạn đã chỉnh sửa
 from ocr_client import perform_ocr
+from transcriber import DEFAULT_TRANSCRIBE_MODEL, transcribe_image
 
 # Khởi tạo App Modal
 app = modal.App("magr-ai-worker")
@@ -15,9 +16,9 @@ app = modal.App("magr-ai-worker")
 # Định nghĩa môi trường cho AI Worker (Chỉ cần CPU và các thư viện cơ bản)
 worker_image = (
     modal.Image.debian_slim(python_version="3.10")
-    .pip_install("fastapi[standard]", "pydantic", "requests")
-    # Modal >= 1.0 không còn tự mount các module local; phải thêm ocr_client vào image
-    .add_local_python_source("ocr_client")
+    .pip_install("fastapi[standard]", "pydantic", "requests", "pillow")
+    # Modal >= 1.0 không còn tự mount các module local; phải thêm các module này vào image
+    .add_local_python_source("ocr_client", "transcriber")
 )
 
 # Payload mong đợi từ Backend NestJS gửi sang
@@ -28,6 +29,12 @@ class GradingTask(BaseModel):
     ocr_content: Optional[str] = None
     problem_description: Optional[str] = ""
     rubric_steps: List[Dict[str, Any]] = []
+
+# Payload chép bài (backend gửi khi giáo viên bấm chấm)
+class TranscribeTask(BaseModel):
+    submission_id: str
+    image_url: str
+    bboxes: Optional[List[Dict[str, Any]]] = None  # box Unlimited-OCR có sẵn; thiếu thì worker tự gọi OCR
 
 # Cấu hình Secret để kéo biến môi trường từ file .env.production lên mây an toàn
 env_path = os.path.join(os.path.dirname(__file__), "..", ".env.production")
@@ -218,6 +225,51 @@ def grade_submission(task: GradingTask) -> Dict[str, Any]:
             "total_score": 0.0,
             "steps": []
         }
+
+@app.function(image=worker_image, timeout=300, secrets=secrets_list)
+@modal.fastapi_endpoint(method="POST")
+def transcribe_submission(task: TranscribeTask) -> Dict[str, Any]:
+    """
+    Chép bài làm theo từng vùng box của Unlimited-OCR bằng Gemini (OPENROUTER_TRANSCRIBE_MODEL).
+    Trả về regions [{box_id, bbox, type, latex, unclear}] để backend lưu và tái sử dụng.
+    """
+    print(f"[Transcriber] 📝 Chép bài cho submission: {task.submission_id}")
+    try:
+        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("API_KEY")
+        if not api_key:
+            raise ValueError("Thiếu biến môi trường OPENROUTER_API_KEY trên server.")
+        model = os.getenv("OPENROUTER_TRANSCRIBE_MODEL") or DEFAULT_TRANSCRIBE_MODEL
+
+        # 1. Box: dùng box có sẵn, nếu chưa có thì gọi Unlimited-OCR để lấy
+        bboxes = task.bboxes
+        ocr_note = None
+        if not bboxes:
+            print("[Transcriber] ℹ️ Chưa có box, gọi Modal OCR...")
+            ocr_res = perform_ocr(task.image_url, custom_id=task.submission_id)
+            if ocr_res and ocr_res.get("status") == "success" and ocr_res.get("bboxes"):
+                bboxes = ocr_res["bboxes"]
+            else:
+                ocr_note = (ocr_res or {}).get("error_message") or "OCR không trả về box"
+                print(f"[Transcriber] ⚠️ Không lấy được box ({ocr_note}), chép cả trang thành một vùng.")
+
+        # 2. Tải ảnh và chép theo vùng
+        img_res = requests.get(task.image_url, timeout=60)
+        img_res.raise_for_status()
+        result = transcribe_image(img_res.content, bboxes, api_key, model)
+
+        cost = result["usage"].get("cost")
+        print(f"[Transcriber] ✅ Xong {len(result['regions'])} vùng, chi phí ${cost}")
+        return {
+            "status": "success",
+            "submission_id": task.submission_id,
+            "image_url": task.image_url,
+            "ocr_bboxes": bboxes,  # trả lại để backend lưu nếu worker vừa tự gọi OCR
+            "ocr_note": ocr_note,
+            **result,
+        }
+    except Exception as e:
+        print(f"[Transcriber] ❌ Lỗi chép bài {task.submission_id}: {e}")
+        return {"status": "error", "submission_id": task.submission_id, "error_message": str(e)}
 
 @app.local_entrypoint()
 def main():
