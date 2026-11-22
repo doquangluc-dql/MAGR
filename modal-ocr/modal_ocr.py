@@ -100,8 +100,11 @@ def parse_ocr_output(raw_text: str) -> List[Dict[str, Any]]:
 # --- 5. CLASS SERVICE SERVERLESS TRÊN GPU L4 ---
 @app.cls(
     image=ocr_image,
-    gpu="L4",                # NVIDIA L4 24GB VRAM (chuẩn bfloat16, tốc độ cao)
-    scaledown_window=300,    # Giữ GPU ấm trong 5 phút sau mỗi request
+    # Danh sách GPU dự phòng: ưu tiên L4 (~$0.80/h), hết L4 thì dùng A10 (~$1.10/h)
+    # rồi L40S (~$1.95/h). Cả ba đều hỗ trợ bfloat16 và có >= 24GB VRAM. Chỉ dùng một loại
+    # "L4" thì request có thể bị treo ở trạng thái "waiting to be scheduled on a GPU_L4 worker".
+    gpu=["L4", "A10", "L40S"],
+    scaledown_window=120,    # Giữ GPU ấm 2 phút sau mỗi request (thời gian chờ này vẫn bị tính tiền GPU)
     timeout=300,             # Giới hạn 5 phút cho mỗi request
 )
 class UnlimitedOCRModel:

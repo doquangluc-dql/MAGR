@@ -70,21 +70,6 @@ services:
     networks:
       - math_network
 
-  ai-worker:
-    build:
-      context: ./ai-worker
-      dockerfile: Dockerfile
-    container_name: math_ai_worker
-    restart: always
-    environment:
-      RABBITMQ_URL: "${RABBITMQ_URL}"
-      MODAL_OCR_URL: "${MODAL_OCR_URL}"
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
-    networks:
-      - math_network
-
   react-client:
     build:
       context: ./frontend

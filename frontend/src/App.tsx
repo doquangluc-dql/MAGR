@@ -115,6 +115,15 @@ const DashboardContent: React.FC = () => {
     return str.includes('.') ? str : num.toFixed(1);
   };
 
+  const isEvaluationError = (evaluation: any) => {
+    return evaluation?.stepEvaluations?.some((s: any) => s.aiReasoning?.startsWith('[LỖI CHẤM BÀI]'));
+  };
+
+  const getEvaluationErrorMessage = (evaluation: any) => {
+    const errStep = evaluation?.stepEvaluations?.find((s: any) => s.aiReasoning?.startsWith('[LỖI CHẤM BÀI]'));
+    return errStep ? errStep.aiReasoning.replace('[LỖI CHẤM BÀI] ', '') : 'Mô hình AI chấm bài gặp lỗi.';
+  };
+
   const getSubmissionStatusInfo = (sub: any) => {
     if (!sub || sub.status === 'NOT_SUBMITTED') {
       return {
@@ -458,16 +467,28 @@ const DashboardContent: React.FC = () => {
   const handleTriggerAiGrading = async (submissionId: string) => {
     try {
       await axios.post('/submissions/trigger-grading', { submissionIds: [submissionId] });
-      alert('Đã kích hoạt AI chấm bài. Vui lòng chờ 5 giây rồi tải lại trang.');
+      alert('Đã gửi yêu cầu AI chấm bài! Hệ thống đang xử lý và sẽ tự động cập nhật kết quả trong giây lát.');
 
-      // Auto refresh submission details after 5s
-      setTimeout(async () => {
-        if (selectedSubmission && selectedSubmission.id === submissionId) {
-          handleSelectSubmissionForGrading(selectedSubmission);
+      const refreshSubmission = async () => {
+        try {
+          if (selectedQuestionForSubmissions) {
+            const subsRes = await axios.get(`/submissions/question/${selectedQuestionForSubmissions.id}`);
+            setSubmissions(subsRes.data);
+            const found = subsRes.data.find((s: any) => s.id === submissionId);
+            if (found) {
+              handleSelectSubmissionForGrading(found);
+            }
+          }
+        } catch (e) {
+          console.error('Lỗi khi làm mới bài nộp:', e);
         }
-      }, 5000);
-    } catch (err) {
-      alert('Lỗi kích hoạt chấm điểm');
+      };
+
+      // Tự động refresh sau 3 giây và 7 giây
+      setTimeout(refreshSubmission, 3000);
+      setTimeout(refreshSubmission, 7000);
+    } catch (err: any) {
+      alert('Lỗi kích hoạt chấm điểm: ' + (err.response?.data?.message || err.message));
     }
   };
 
@@ -1093,8 +1114,13 @@ const DashboardContent: React.FC = () => {
                             </td>
                             <td>
                               {sub.status === 'NOT_SUBMITTED' && <span className="badge badge-error">Chưa nộp</span>}
-                              {sub.status === 'SUBMITTED' && <span className="badge badge-warning">Đang chờ chấm</span>}
-                              {sub.status === 'GRADED' && <span className="badge badge-success">Đã chấm điểm</span>}
+                              {sub.status === 'SUBMITTED' && !isEvaluationError(sub.evaluation) && <span className="badge badge-warning">Đang chờ chấm</span>}
+                              {sub.status === 'GRADED' && !isEvaluationError(sub.evaluation) && <span className="badge badge-success">Đã chấm điểm</span>}
+                              {isEvaluationError(sub.evaluation) && (
+                                <span className="badge badge-error" style={{ backgroundColor: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', border: '1px solid #ef4444' }} title={getEvaluationErrorMessage(sub.evaluation)}>
+                                  Lỗi AI chấm
+                                </span>
+                              )}
                             </td>
                             <td>
                               {sub.ocrStatus === 'PROCESSING' && <span className="badge badge-warning" style={{ backgroundColor: 'rgba(56,189,248,0.2)', color: '#38bdf8' }}>Đang OCR...</span>}
@@ -1110,7 +1136,17 @@ const DashboardContent: React.FC = () => {
                               )}
                             </td>
                             <td style={{ fontWeight: 'bold' }}>
-                              {sub.evaluation ? `${formatScore(sub.evaluation.totalScore)}đ` : '---'}
+                              {sub.evaluation ? (
+                                isEvaluationError(sub.evaluation) ? (
+                                  <span style={{ color: '#ef4444', fontSize: '13px' }} title={getEvaluationErrorMessage(sub.evaluation)}>
+                                    Chấm lỗi
+                                  </span>
+                                ) : (
+                                  `${formatScore(sub.evaluation.totalScore)}đ`
+                                )
+                              ) : (
+                                '---'
+                              )}
                             </td>
                             <td>
                               <button className="btn btn-secondary" onClick={() => handleSelectSubmissionForGrading(sub)}>
@@ -1565,6 +1601,35 @@ const DashboardContent: React.FC = () => {
                       Chạy AI Chấm bài
                     </button>
                   </div>
+
+                  {/* Cảnh báo nếu mô hình AI chấm lỗi */}
+                  {selectedSubmission.evaluation && isEvaluationError(selectedSubmission.evaluation) && (
+                    <div style={{
+                      backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                      border: '1px solid #ef4444',
+                      borderRadius: '8px',
+                      padding: '16px',
+                      marginBottom: '20px'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#ef4444', fontWeight: 'bold', fontSize: '15px', marginBottom: '6px' }}>
+                        <AlertTriangle size={20} />
+                        <span>Mô hình AI chấm bài bị lỗi!</span>
+                      </div>
+                      <div style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: '1.5', marginBottom: '12px' }}>
+                        Chi tiết lỗi: <strong>{getEvaluationErrorMessage(selectedSubmission.evaluation)}</strong>
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                        Giáo viên có thể bấm "Chạy AI Chấm bài" để kích hoạt chấm lại, hoặc tự nhập điểm và nhận xét thủ công ở các bước bên dưới.
+                      </div>
+                      <button
+                        className="btn btn-primary"
+                        style={{ fontSize: '12px', padding: '6px 14px' }}
+                        onClick={() => handleTriggerAiGrading(selectedSubmission.id)}
+                      >
+                        Thử chấm lại với AI
+                      </button>
+                    </div>
+                  )}
 
                   {!selectedSubmission.evaluation ? (
                     <div style={{ padding: '24px', backgroundColor: 'rgba(255,255,255,0.01)', border: '1px dashed var(--border-color)', borderRadius: '8px', textAlign: 'center', color: 'var(--text-secondary)' }}>

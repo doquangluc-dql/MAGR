@@ -29,6 +29,11 @@ def perform_ocr(image_url: str, custom_id: str = "submission") -> Optional[Dict[
         response = requests.post(MODAL_OCR_URL, json=payload, timeout=180)
         if response.status_code == 200:
             data = response.json()
+            # Dịch vụ OCR trả HTTP 200 kèm {"status": "error"} khi xử lý ảnh lỗi
+            if data.get("status") == "error":
+                msg = data.get("message") or data.get("error_message") or "Lỗi không xác định"
+                print(f"[OCR Client] ❌ Dịch vụ OCR báo lỗi: {msg}")
+                return {"status": "error", "error_message": msg}
             ocr_items = data.get("ocr", [])
             infer_time = data.get("infer_time_seconds", 0)
 

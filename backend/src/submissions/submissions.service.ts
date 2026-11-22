@@ -90,23 +90,32 @@ export class SubmissionsService {
           max_length: 1024,
           image_size: 1024,
           base_size: 1024
-        })
+        }),
+        // Tính cả thời gian chờ GPU + cold start; tránh để bài nộp kẹt ở PROCESSING mãi
+        signal: AbortSignal.timeout(10 * 60 * 1000),
       })
-      .then(res => res.json())
-      .then((ocrRes: any) => {
-        let fullText = "";
-        if (ocrRes && ocrRes.ocr) {
-            fullText = ocrRes.ocr.map((item: any) => item.context).join("\n");
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error(`OCR HTTP ${res.status}: ${await res.text()}`);
         }
-        this.saveOcrResult({
+        return res.json();
+      })
+      .then(async (ocrRes: any) => {
+        // Dịch vụ OCR trả HTTP 200 kèm {"status": "error", "message": ...} khi xử lý ảnh lỗi
+        if (!ocrRes || ocrRes.status === 'error' || !Array.isArray(ocrRes.ocr)) {
+          throw new Error(ocrRes?.message || 'Dịch vụ OCR trả về dữ liệu không hợp lệ');
+        }
+        const fullText = ocrRes.ocr.map((item: any) => item.context).join("\n");
+        await this.saveOcrResult({
           submission_id: submission.id,
           ocr_content: fullText,
           ocr_bboxes: ocrRes.ocr,
           status: 'success'
         });
-      }).catch(err => {
+      }).catch(async (err) => {
         console.error(`[Error] Gọi OCR thất bại cho submission ${submission.id}:`, err.message);
-        this.saveOcrResult({ submission_id: submission.id, status: 'error' });
+        await this.saveOcrResult({ submission_id: submission.id, status: 'error' })
+          .catch((e) => console.error(`[Error] Không lưu được trạng thái OCR lỗi cho ${submission.id}:`, e.message));
       });
     } else {
       console.log(`[Placeholder] Bỏ qua gọi OCR tự động vì chưa có biến MODAL_OCR_URL`);
@@ -163,6 +172,7 @@ export class SubmissionsService {
         s3_image_url: sub.imageUrl,
         ocr_content: sub.ocrContent,
         ocr_bboxes: sub.ocrBboxes,
+        problem_description: sub.question.content,
         rubric_steps: sub.question.rubricSteps.map((step) => ({
           id: step.id,
           step_index: step.stepIndex,
@@ -179,10 +189,16 @@ export class SubmissionsService {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         })
-        .then(res => res.json())
-        .then((gradingResult: any) => {
+        .then(async (res) => {
+          if (!res.ok) {
+            const errBody = await res.text();
+            throw new Error(`Worker HTTP ${res.status}: ${errBody}`);
+          }
+          return res.json();
+        })
+        .then(async (gradingResult: any) => {
           if (gradingResult && gradingResult.status === 'success') {
-            this.evaluationsService.saveAiEvaluation({
+            await this.evaluationsService.saveAiEvaluation({
               submission_id: gradingResult.submission_id,
               total_score: gradingResult.total_score,
               steps: gradingResult.steps.map((s: any) => ({
@@ -191,9 +207,14 @@ export class SubmissionsService {
                 ai_reasoning: s.ai_reasoning
               }))
             });
+          } else {
+            const errorMsg = gradingResult?.error_message || 'Mô hình AI chấm bài trả về lỗi không xác định.';
+            console.error(`[Error] AI chấm lỗi cho bài ${sub.id}: ${errorMsg}`);
+            await this.evaluationsService.saveAiEvaluationError(sub.id, errorMsg);
           }
-        }).catch(err => {
+        }).catch(async (err) => {
           console.error(`[Error] Không thể gọi AI Worker cho submission ${sub.id}:`, err.message);
+          await this.evaluationsService.saveAiEvaluationError(sub.id, `Lỗi kết nối AI Worker: ${err.message}`);
         });
       } else {
         console.log(`[Placeholder] Chờ AI chấm bài cho submission: ${sub.id}`);

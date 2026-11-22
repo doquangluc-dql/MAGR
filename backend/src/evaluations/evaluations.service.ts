@@ -66,6 +66,69 @@ export class EvaluationsService {
     });
   }
 
+  async saveAiEvaluationError(submissionId: string, errorMessage: string) {
+    const submission = await this.prisma.submission.findUnique({
+      where: { id: submissionId },
+      include: {
+        question: {
+          include: {
+            rubricSteps: {
+              orderBy: { stepIndex: 'asc' },
+            },
+          },
+        },
+      },
+    });
+
+    if (!submission) {
+      console.error(`Submission not found for AI evaluation error: ${submissionId}`);
+      return;
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.evaluation.findFirst({
+        where: { submissionId },
+      });
+      if (existing) {
+        await tx.stepEvaluation.deleteMany({
+          where: { evaluationId: existing.id },
+        });
+        await tx.evaluation.delete({
+          where: { id: existing.id },
+        });
+      }
+
+      const evaluation = await tx.evaluation.create({
+        data: {
+          submissionId,
+          totalScore: 0,
+          isTeacherOverridden: false,
+        },
+      });
+
+      const steps = submission.question?.rubricSteps || [];
+      if (steps.length > 0) {
+        await Promise.all(
+          steps.map((step, idx) =>
+            tx.stepEvaluation.create({
+              data: {
+                evaluationId: evaluation.id,
+                rubricStepId: step.id,
+                isMarkedIncorrect: true,
+                aiReasoning: idx === 0 
+                  ? `[LỖI CHẤM BÀI] ${errorMessage}` 
+                  : `[LỖI CHẤM BÀI] Quá trình chấm bài qua mô hình AI bị gián đoạn.`,
+              },
+            }),
+          ),
+        );
+      }
+
+      console.log(`Saved AI evaluation error for submission ${submissionId}: ${errorMessage}`);
+      return evaluation;
+    });
+  }
+
   async getEvaluationBySubmission(submissionId: string, userId: string, role: Role) {
     const submission = await this.prisma.submission.findUnique({
       where: { id: submissionId },
